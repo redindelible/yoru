@@ -1,23 +1,54 @@
-// use crate::props::{CalculatedLayout, ElementAttrs};
+use std::ops::Add;
+use tiny_skia::Rect;
 use crate::{RenderContext, Widget};
 
-pub use props::{CalculatedLayout, ElementAttrs, ElementProperties};
+pub use props::{CalculatedLayout, ElementProperties};
+use crate::attrs::{ElementAttrs, Size};
+
+#[derive(Copy, Clone, PartialEq, Debug)]
+pub struct BoxSize {
+    pub vert: f32,
+    pub horiz: f32
+}
+
+impl Add for BoxSize {
+    type Output = BoxSize;
+
+    fn add(self, rhs: Self) -> Self::Output {
+        BoxSize { vert: self.vert + rhs.vert, horiz: self.horiz + rhs.horiz }
+    }
+}
 
 #[derive(Debug)]
 pub struct Element(Box<dyn Widget>);
 
 impl Element {
-    pub fn update_layout(&mut self, layout: CalculatedLayout) {
-        self.0.props_mut().set_calculated(layout);
-        self.0.update();
+    pub fn update(&mut self, margin_box: Rect) {
+        let calculated = self.0.props().get_calculated();
+        if !calculated.is_some_and(|cached| cached.margin_box == margin_box) {
+            self.0.props_mut().set_calculated(CalculatedLayout { margin_box });
+            self.0.update(margin_box);
+        }
     }
 
-    pub fn content_width(&self) -> f32 {
-        self.0.content_width()
-    }
-
-    pub fn content_height(&self) -> f32 {
-        self.0.content_height()
+    pub fn min_margin_box_size(&self) -> BoxSize {
+        let mut min_content_size = self.0.min_content_size();
+        let attrs = self.attrs();
+        match attrs.width {
+            Size::Fit => (),
+            Size::Fixed(amount) => {
+                min_content_size.horiz = amount;
+            }
+            Size::Expand => ()  // todo should this be zero?
+        }
+        match attrs.height {
+            Size::Fit => (),
+            Size::Fixed(amount) => {
+                min_content_size.vert = amount;
+            }
+            Size::Expand => ()  // todo should this be zero?
+        }
+        return attrs.margin.size() + attrs.border.size() + attrs.padding.size() + min_content_size;
     }
 
     pub fn attrs(&self) -> &ElementAttrs {
@@ -25,7 +56,8 @@ impl Element {
     }
 
     pub fn draw(&mut self, context: &mut RenderContext) {
-        self.0.draw(context);
+        let layout = self.0.props().get_calculated().unwrap();
+        self.0.draw(context, layout.margin_box);
     }
 }
 
@@ -47,26 +79,11 @@ impl IntoElement for Element {
 
 mod props {
     use tiny_skia::Rect;
-    use crate::attrs::Size;
+    use crate::attrs::{Border, ElementAttrs, Margin, Padding, Size};
 
     #[derive(Debug, Copy, Clone, PartialEq)]
     pub struct CalculatedLayout {
-        pub content_box: Rect
-    }
-
-    #[derive(Debug)]
-    pub struct ElementAttrs {
-        pub width: Size,
-        pub height: Size,
-    }
-
-    impl Default for ElementAttrs {
-        fn default() -> Self {
-            ElementAttrs {
-                width: Size::Fit,
-                height: Size::Fit
-            }
-        }
+        pub margin_box: Rect
     }
 
     #[derive(Debug)]
@@ -95,12 +112,8 @@ mod props {
             self.calculated_layout = Some(layout);
         }
 
-        pub fn get_calculated(&self) -> CalculatedLayout {
-            if let Some(layout) = self.calculated_layout {
-                layout
-            } else {
-                CalculatedLayout { content_box: Rect::from_xywh(0.0, 0.0, 0.0, 0.0).unwrap() }
-            }
+        pub(super) fn get_calculated(&self) -> Option<CalculatedLayout> {
+            self.calculated_layout
         }
 
         pub fn set_width(&mut self, width: Size) {
@@ -111,6 +124,21 @@ mod props {
         pub fn set_height(&mut self, height: Size) {
             self.invalidate();
             self.attrs.height = height;
+        }
+
+        pub fn set_margin(&mut self, margin: impl Into<Margin>) {
+            self.invalidate();
+            self.attrs.margin = margin.into();
+        }
+
+        pub fn set_padding(&mut self, padding: impl Into<Padding>) {
+            self.invalidate();
+            self.attrs.padding = padding.into();
+        }
+
+        pub fn set_border(&mut self, border: impl Into<Border>) {
+            self.invalidate();
+            self.attrs.border = border.into();
         }
     }
 }

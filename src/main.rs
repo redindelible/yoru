@@ -9,7 +9,8 @@ mod attrs;
 
 use tiny_skia::{PixmapMut, Rect};
 use attrs::Size;
-use element::{Element, IntoElement, CalculatedLayout, ElementProperties};
+use element::{Element, IntoElement, ElementProperties};
+use crate::element::BoxSize;
 
 pub struct RenderContext<'a> {
     canvas: PixmapMut<'a>,
@@ -20,12 +21,33 @@ pub trait Widget: Debug {
     fn props(&self) -> &ElementProperties;
     fn props_mut(&mut self) -> &mut ElementProperties;
 
-    fn update(&mut self);
+    fn update(&mut self, margin_box: Rect);
 
-    fn content_width(&self) -> f32;
-    fn content_height(&self) -> f32;
+    fn min_content_size(&self) -> BoxSize;
 
-    fn draw(&mut self, context: &mut RenderContext);
+    fn draw(&mut self, context: &mut RenderContext, margin_box: Rect);
+
+    fn border_box(&self, margin_box: Rect) -> Rect {
+        let attrs = self.props().attrs();
+
+        let left = margin_box.left() + attrs.margin.left + attrs.border.thickness / 2.0;
+        let right = left.max(margin_box.right() - attrs.margin.right - attrs.border.thickness / 2.0);
+        let top = margin_box.top() + attrs.margin.top + attrs.border.thickness / 2.0;
+        let bottom = top.max(margin_box.bottom() - attrs.margin.bottom - attrs.border.thickness / 2.0);
+
+        Rect::from_ltrb(left, top, right, bottom).unwrap()
+    }
+
+    fn content_box(&self, margin_box: Rect) -> Rect {
+        let attrs = self.props().attrs();
+
+        let left = margin_box.left() + attrs.margin.left + attrs.border.thickness + attrs.padding.left;
+        let right = left.max(margin_box.right() - attrs.margin.right - attrs.border.thickness - attrs.padding.right);
+        let top = margin_box.top() + attrs.margin.top + attrs.border.thickness + attrs.padding.top;
+        let bottom = top.max(margin_box.bottom() - attrs.margin.bottom - attrs.border.thickness - attrs.padding.bottom);
+
+        Rect::from_ltrb(left, top, right, bottom).unwrap()
+    }
 }
 
 
@@ -84,73 +106,69 @@ impl Widget for Div {
         &mut self.props
     }
 
-    fn update(&mut self) {
-        let allocated = self.props.get_calculated().content_box;
+    fn update(&mut self, margin_box: Rect) {
+        let content_box = self.content_box(margin_box);
 
         let mut used = 0.0;
         let mut split_ways = 0.0;
         for child in &self.children {
             match child.attrs().height {
                 Size::Fit => {
-                    used += child.content_height();
+                    used += child.min_margin_box_size().vert;
                 }
                 Size::Fixed(amount) => {
                     used += amount;
                 }
                 Size::Expand => {
+                    used += child.min_margin_box_size().vert;
                     split_ways += 1.0;
                 }
             }
         }
 
-        let remaining = (allocated.height() - used).max(0.0);
-        let y = allocated.y();
+        let remaining = (content_box.height() - used).max(0.0);
+        let y = content_box.y();
         for child in &mut self.children {
             let width = match child.attrs().width {
-                Size::Fit => child.content_width(),
+                Size::Fit => child.min_margin_box_size().horiz,
                 Size::Fixed(amount) => amount,
-                Size::Expand => allocated.width()
+                Size::Expand => content_box.width()
             };
 
             match child.attrs().height {
                 Size::Fit => {
-                    let space = Rect::from_xywh(allocated.x(), y, width, child.content_height()).unwrap();
-                    let layout = CalculatedLayout { content_box: space };
-                    child.update_layout(layout);
+                    let space = Rect::from_xywh(content_box.x(), y, width, child.min_margin_box_size().vert).unwrap();
+                    child.update(space);
                 }
                 Size::Fixed(amount) => {
-                    let space = Rect::from_xywh(allocated.x(), y, width, amount).unwrap();
-                    let layout = CalculatedLayout { content_box: space };
-                    child.update_layout(layout);
+                    let space = Rect::from_xywh(content_box.x(), y, width, amount).unwrap();
+                    child.update(space);
                 }
                 Size::Expand => {
-                    let space = Rect::from_xywh(allocated.x(), y, width, remaining / split_ways * 1.0).unwrap();
-                    let layout = CalculatedLayout { content_box: space };
-                    child.update_layout(layout);
+                    let space = Rect::from_xywh(content_box.x(), y, width, child.min_margin_box_size().vert + remaining / split_ways * 1.0).unwrap();
+                    child.update(space);
                 }
             }
         }
     }
 
-    fn content_width(&self) -> f32 {
-        match self.props.attrs().width {
-            Size::Fixed(amount) => amount,
-            Size::Fit | Size::Expand => self.children.iter().map(Element::content_width).max_by(f32::total_cmp).unwrap_or(0.0)
+    fn min_content_size(&self) -> BoxSize {
+        let mut max_width = 0.0;
+        let mut total_height = 0.0;
+
+        for child in &self.children {
+            let child_min_margin_box_size = child.min_margin_box_size();
+            if child_min_margin_box_size.horiz > max_width {
+                max_width = child_min_margin_box_size.horiz;
+            }
+            total_height += child_min_margin_box_size.vert;
         }
+        BoxSize { vert: total_height, horiz: max_width }
     }
 
-    fn content_height(&self) -> f32 {
-        match self.props.attrs().height {
-            Size::Fixed(amount) => amount,
-            Size::Fit | Size::Expand => self.children.iter().map(Element::content_height).sum()
-        }
-    }
-
-    fn draw(&mut self, mut context: &mut RenderContext) {
-        let layout = self.props.get_calculated();
-
-        let content_box = layout.content_box;
-        let rect = kurbo::Rect::new(content_box.left() as f64, content_box.top() as f64, content_box.right() as f64, content_box.bottom() as f64);
+    fn draw(&mut self, mut context: &mut RenderContext, margin_box: Rect) {
+        let border_box = self.border_box(margin_box);
+        let rect = kurbo::Rect::new(border_box.left() as f64, border_box.top() as f64, border_box.right() as f64, border_box.bottom() as f64);
 
         let path = to_tiny_skia_path(rect);
         let mut stroke = tiny_skia::Stroke::default();
@@ -183,6 +201,21 @@ macro_rules! div {
         div.props_mut().set_height($e);
         div
     }};
+    (margin=$e:expr $(, $($rest:tt)*)?) => {{
+        let mut div = div!($( $($rest)* )?);
+        div.props_mut().set_margin($e);
+        div
+    }};
+    (padding=$e:expr $(, $($rest:tt)*)?) => {{
+        let mut div = div!($( $($rest)* )?);
+        div.props_mut().set_padding($e);
+        div
+    }};
+    (border=$e:expr $(, $($rest:tt)*)?) => {{
+        let mut div = div!($( $($rest)* )?);
+        div.props_mut().set_border($e);
+        div
+    }};
     ([$($item:expr),*]) => {{
         let mut div = Div::new();
         $(
@@ -195,12 +228,10 @@ macro_rules! div {
 
 
 fn main() {
-    let mut b= div!(width=Size::Fit, [
+    let mut b= div!(width=Size::Fit, margin=0.0, [
         div!(width=Size::Expand, height=Size::Fixed(10.0))
     ]).into_element();
-    b.update_layout(CalculatedLayout { content_box: Rect::from_xywh(0.0, 0.0, 100.0, 100.0).unwrap() });
-
-    dbg!(&b);
+    b.update(Rect::from_xywh(0.0, 0.0, 100.0, 100.0).unwrap());
 
     Application::new(b).run();
 }
