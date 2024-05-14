@@ -10,6 +10,7 @@ mod attrs;
 use tiny_skia::{PixmapMut, Rect};
 use attrs::Size;
 use element::{Element, IntoElement, ElementProperties};
+use crate::attrs::{Border, Color};
 use crate::element::BoxSize;
 
 pub struct RenderContext<'a> {
@@ -79,7 +80,6 @@ fn to_tiny_skia_path<S: Shape>(shape: S) -> tiny_skia::Path {
 #[derive(Debug)]
 struct Div {
     props: ElementProperties,
-
     children: Vec<Element>,
 }
 
@@ -167,16 +167,19 @@ impl Widget for Div {
     }
 
     fn draw(&mut self, mut context: &mut RenderContext, margin_box: Rect) {
-        let border_box = self.border_box(margin_box);
-        let rect = kurbo::Rect::new(border_box.left() as f64, border_box.top() as f64, border_box.right() as f64, border_box.bottom() as f64);
+        let border = self.props.attrs().border;
 
-        let path = to_tiny_skia_path(rect);
-        let mut stroke = tiny_skia::Stroke::default();
-        // stroke.width = 1.0;
-        let mut paint = tiny_skia::Paint::default();
-        paint.set_color(tiny_skia::Color::WHITE);
-
-        context.canvas.stroke_path(&path, &paint, &stroke, context.transform, None);
+        if border.thickness > 0.0 {
+            let border_box = self.border_box(margin_box);
+            let path = to_tiny_skia_path(kurbo::Rect::new(
+                border_box.left() as f64, border_box.top() as f64, border_box.right() as f64, border_box.bottom() as f64
+            ));
+            let mut stroke = tiny_skia::Stroke::default();
+            stroke.width = border.thickness;
+            let mut paint = tiny_skia::Paint::default();
+            paint.set_color(border.color.into());
+            context.canvas.stroke_path(&path, &paint, &stroke, context.transform, None);
+        }
 
         for child in &mut self.children {
             child.draw(context);
@@ -228,7 +231,7 @@ macro_rules! div {
 
 
 fn main() {
-    let mut b= div!(width=Size::Fit, margin=0.0, [
+    let mut b= div!(width=Size::Fit, margin=0.0, border=Border::default().with_color(Color::GREEN), [
         div!(width=Size::Expand, height=Size::Fixed(10.0))
     ]).into_element();
     b.update(Rect::from_xywh(0.0, 0.0, 100.0, 100.0).unwrap());

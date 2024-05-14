@@ -12,39 +12,9 @@ use winit::event::WindowEvent;
 use winit::event_loop::ActiveEventLoop;
 use winit::window::{WindowAttributes, WindowId};
 use softbuffer::{Buffer, Surface};
+use crate::attrs::Color;
 use crate::element::Element;
 use crate::RenderContext;
-
-
-// piet and softbuffer store color in different orders
-struct Color {
-    b: u8,
-    g: u8,
-    r: u8,
-    a: u8,
-}
-
-impl Color {
-    fn from_rgb8(r: u8, g: u8, b: u8) -> Color {
-        Color::from_rgba8(r, g, b, 255)
-    }
-
-    fn from_rgba8(r: u8, g: u8, b: u8, a: u8) -> Color {
-        Color { b, g, r, a }
-    }
-}
-
-impl From<Color> for cosmic_text::Color {
-    fn from(value: Color) -> Self {
-        cosmic_text::Color::rgba(value.b, value.g, value.r, value.a)
-    }
-}
-
-impl From<Color> for tiny_skia::Color {
-    fn from(value: Color) -> Self {
-        tiny_skia::Color::from_rgba8(value.b, value.g, value.r, value.a)
-    }
-}
 
 struct ActiveApplication {
     window: Rc<Window>,
@@ -110,9 +80,9 @@ impl winit::application::ApplicationHandler for Application {
                 let size = window.inner_size();
                 surface.resize(NonZeroU32::new(size.width).unwrap(), NonZeroU32::new(size.height).unwrap()).unwrap();
                 let mut buffer = surface.buffer_mut().unwrap();
-                let mut paint = tiny_skia::Paint::default();
+                // let mut paint = tiny_skia::Paint::default();
                 let mut pixmap = PixmapMut::from_bytes(bytemuck::cast_slice_mut(buffer.as_mut()), size.width, size.height).unwrap();
-                pixmap.fill(Color::from_rgb8(0, 0, 0).into());
+                pixmap.fill(Color::WHITE.into());
 
                 // {
                 //     let mut buffer = cosmic_text::Buffer::new(&mut self.font_system, Metrics::new(48.0, 60.0));

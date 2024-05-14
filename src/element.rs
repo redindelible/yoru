@@ -2,7 +2,8 @@ use std::ops::Add;
 use tiny_skia::Rect;
 use crate::{RenderContext, Widget};
 
-pub use props::{CalculatedLayout, ElementProperties};
+pub use props::{ElementProperties};
+use props::CalculatedLayout;
 use crate::attrs::{ElementAttrs, Size};
 
 #[derive(Copy, Clone, PartialEq, Debug)]
@@ -32,6 +33,7 @@ impl Element {
     }
 
     pub fn min_margin_box_size(&self) -> BoxSize {
+        // todo cache this, and possibly cache min_content_size separately
         let mut min_content_size = self.0.min_content_size();
         let attrs = self.attrs();
         match attrs.width {
@@ -56,7 +58,7 @@ impl Element {
     }
 
     pub fn draw(&mut self, context: &mut RenderContext) {
-        let layout = self.0.props().get_calculated().unwrap();
+        let layout = self.0.props().get_calculated().unwrap();  // todo avoid panics, somehow
         self.0.draw(context, layout.margin_box);
     }
 }
@@ -82,7 +84,7 @@ mod props {
     use crate::attrs::{Border, ElementAttrs, Margin, Padding, Size};
 
     #[derive(Debug, Copy, Clone, PartialEq)]
-    pub struct CalculatedLayout {
+    pub(super) struct CalculatedLayout {
         pub margin_box: Rect
     }
 

@@ -1,5 +1,42 @@
 use crate::element::BoxSize;
 
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
+pub struct Color {
+    pub r: u8,
+    pub g: u8,
+    pub b: u8,
+    pub a: u8,
+}
+
+impl Color {
+    pub const BLACK: Color = Color::from_rgb8(0, 0, 0);
+    pub const WHITE: Color = Color::from_rgb8(255, 255, 255);
+    pub const RED: Color = Color::from_rgb8(255, 0, 0);
+    pub const GREEN: Color = Color::from_rgb8(0, 255, 0);
+    pub const BLUE: Color = Color::from_rgb8(0, 0, 255);
+
+    pub const fn from_rgb8(r: u8, g: u8, b: u8) -> Color {
+        Color::from_rgba8(r, g, b, 255)
+    }
+
+    pub const fn from_rgba8(r: u8, g: u8, b: u8, a: u8) -> Color {
+        Color { r, g, b, a }
+    }
+}
+
+impl From<Color> for cosmic_text::Color {
+    fn from(value: Color) -> Self {
+        cosmic_text::Color::rgba(value.r, value.g, value.b, value.a)
+    }
+}
+
+impl From<Color> for tiny_skia::Color {
+    fn from(value: Color) -> Self {
+        // when writing to a buffer we need to swap b and r
+        tiny_skia::Color::from_rgba8(value.b, value.g, value.r, value.a)
+    }
+}
+
 #[derive(Debug, Copy, Clone, Default)]
 pub enum Size {
     Expand,
@@ -107,10 +144,23 @@ impl From<(f32, f32, f32, f32)> for Padding {
 #[derive(Debug, Copy, Clone)]
 pub struct Border {
     pub thickness: f32,
-    pub radius: f32
+    pub radius: f32,
+    pub color: Color,
 }
 
 impl Border {
+    pub fn with_color(&self, color: Color) -> Border {
+        Border { color, ..*self }
+    }
+
+    pub fn with_thickness(&self, thickness: f32) -> Border {
+        Border { thickness, ..*self }
+    }
+
+    pub fn with_radius(&self, radius: f32) -> Border {
+        Border { radius, ..*self }
+    }
+
     pub fn size(&self) -> BoxSize {
         BoxSize { vert: self.thickness + self.thickness, horiz: self.thickness + self.thickness }
     }
@@ -120,7 +170,8 @@ impl Default for Border {
     fn default() -> Self {
         Border {
             thickness: 2.0,
-            radius: 0.0
+            radius: 0.0,
+            color: Color::BLACK
         }
     }
 }
