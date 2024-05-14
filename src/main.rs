@@ -39,6 +39,17 @@ pub trait Widget: Debug {
         Rect::from_ltrb(left, top, right, bottom).unwrap()
     }
 
+    fn padding_box(&self, margin_box: Rect) -> Rect {
+        let attrs = self.props().attrs();
+
+        let left = margin_box.left() + attrs.margin.left + attrs.border.thickness;
+        let right = left.max(margin_box.right() - attrs.margin.right - attrs.border.thickness);
+        let top = margin_box.top() + attrs.margin.top + attrs.border.thickness;
+        let bottom = top.max(margin_box.bottom() - attrs.margin.bottom - attrs.border.thickness);
+
+        Rect::from_ltrb(left, top, right, bottom).unwrap()
+    }
+
     fn content_box(&self, margin_box: Rect) -> Rect {
         let attrs = self.props().attrs();
 
@@ -168,7 +179,6 @@ impl Widget for Div {
 
     fn draw(&mut self, mut context: &mut RenderContext, margin_box: Rect) {
         let border = self.props.attrs().border;
-
         if border.thickness > 0.0 {
             let border_box = self.border_box(margin_box);
             let path = to_tiny_skia_path(kurbo::Rect::new(
@@ -179,6 +189,15 @@ impl Widget for Div {
             let mut paint = tiny_skia::Paint::default();
             paint.set_color(border.color.into());
             context.canvas.stroke_path(&path, &paint, &stroke, context.transform, None);
+        }
+
+        let background = self.props.attrs().background;
+        if let Some(background) = background {
+            let padding_box = self.padding_box(margin_box);
+
+            let mut paint = tiny_skia::Paint::default();
+            paint.set_color(background.into());
+            context.canvas.fill_rect(padding_box, &paint, context.transform, None);
         }
 
         for child in &mut self.children {
@@ -219,6 +238,11 @@ macro_rules! div {
         div.props_mut().set_border($e);
         div
     }};
+    (background=$e:expr $(, $($rest:tt)*)?) => {{
+        let mut div = div!($( $($rest)* )?);
+        div.props_mut().set_background($e);
+        div
+    }};
     ([$($item:expr),*]) => {{
         let mut div = Div::new();
         $(
@@ -231,7 +255,7 @@ macro_rules! div {
 
 
 fn main() {
-    let mut b= div!(width=Size::Fit, margin=0.0, border=Border::default().with_color(Color::GREEN), [
+    let mut b= div!(width=Size::Fit, margin=0.0, background=Color::LIGHT_GRAY, [
         div!(width=Size::Expand, height=Size::Fixed(10.0))
     ]).into_element();
     b.update(Rect::from_xywh(0.0, 0.0, 100.0, 100.0).unwrap());

@@ -10,6 +10,9 @@ pub struct Color {
 
 impl Color {
     pub const BLACK: Color = Color::from_rgb8(0, 0, 0);
+    pub const DARK_GRAY: Color = Color::from_rgb8(105, 105, 105);
+    pub const GRAY: Color = Color::from_rgb8(128, 128, 128);
+    pub const LIGHT_GRAY: Color = Color::from_rgb8(211, 211, 211);
     pub const WHITE: Color = Color::from_rgb8(255, 255, 255);
     pub const RED: Color = Color::from_rgb8(255, 0, 0);
     pub const GREEN: Color = Color::from_rgb8(0, 255, 0);
@@ -181,6 +184,7 @@ pub struct ElementAttrs {
     pub border: Border,
     pub padding: Padding,
     pub margin: Margin,
+    pub background: Option<Color>,
 
     pub width: Size,
     pub height: Size,

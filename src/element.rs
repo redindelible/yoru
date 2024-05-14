@@ -81,7 +81,7 @@ impl IntoElement for Element {
 
 mod props {
     use tiny_skia::Rect;
-    use crate::attrs::{Border, ElementAttrs, Margin, Padding, Size};
+    use crate::attrs::{Border, Color, ElementAttrs, Margin, Padding, Size};
 
     #[derive(Debug, Copy, Clone, PartialEq)]
     pub(super) struct CalculatedLayout {
@@ -141,6 +141,11 @@ mod props {
         pub fn set_border(&mut self, border: impl Into<Border>) {
             self.invalidate();
             self.attrs.border = border.into();
+        }
+
+        pub fn set_background(&mut self, background: impl Into<Option<Color>>) {
+            self.invalidate();
+            self.attrs.background = background.into();
         }
     }
 }
