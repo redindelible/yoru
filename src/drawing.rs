@@ -58,6 +58,8 @@ pub struct Application {
     font_system: FontSystem,
     swash_cache: SwashCache,
 
+    scale_factor: f32,
+
     to_draw: Element
 }
 
@@ -67,6 +69,8 @@ impl Application {
             active: None,
             font_system: FontSystem::new(),
             swash_cache: SwashCache::new(),
+
+            scale_factor: 1.0,
 
             to_draw
         }
@@ -86,6 +90,7 @@ impl winit::application::ApplicationHandler for Application {
         let context = softbuffer::Context::new(Rc::clone(&window)).unwrap();
         let surface = Surface::new(&context, Rc::clone(&window)).unwrap();
 
+        self.scale_factor = window.scale_factor() as f32;
         self.active = Some(ActiveApplication {
             window,
             context,
@@ -97,6 +102,10 @@ impl winit::application::ApplicationHandler for Application {
         let Some(ActiveApplication { window, context, surface }) = &mut self.active else { return; };
 
         match event {
+            WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
+                self.scale_factor = scale_factor as f32;
+                // todo update element
+            }
             WindowEvent::RedrawRequested => {
                 let size = window.inner_size();
                 surface.resize(NonZeroU32::new(size.width).unwrap(), NonZeroU32::new(size.height).unwrap()).unwrap();
@@ -114,8 +123,10 @@ impl winit::application::ApplicationHandler for Application {
                 //         pixmap.fill_rect(tiny_skia::Rect::from_xywh(x as f32, y as f32, w as f32, h as f32).unwrap(), &paint, tiny_skia::Transform::identity(), None);
                 //     });
                 // }
+
                 let mut render_context = RenderContext {
-                    canvas: pixmap
+                    canvas: pixmap,
+                    transform: tiny_skia::Transform::from_scale(self.scale_factor, self.scale_factor)
                 };
                 self.to_draw.draw(&mut render_context);
 

@@ -12,7 +12,8 @@ use attrs::Size;
 use element::{Element, IntoElement, CalculatedLayout, ElementProperties};
 
 pub struct RenderContext<'a> {
-    canvas: PixmapMut<'a>
+    canvas: PixmapMut<'a>,
+    transform: tiny_skia::Transform
 }
 
 pub trait Widget: Debug {
@@ -157,7 +158,7 @@ impl Widget for Div {
         let mut paint = tiny_skia::Paint::default();
         paint.set_color(tiny_skia::Color::WHITE);
 
-        context.canvas.stroke_path(&path, &paint, &stroke, tiny_skia::Transform::identity(), None);
+        context.canvas.stroke_path(&path, &paint, &stroke, context.transform, None);
 
         for child in &mut self.children {
             child.draw(context);
