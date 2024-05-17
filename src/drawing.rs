@@ -12,9 +12,9 @@ use winit::event::WindowEvent;
 use winit::event_loop::ActiveEventLoop;
 use winit::window::{WindowAttributes, WindowId};
 use softbuffer::{Buffer, Surface};
-use crate::attrs::Color;
-use crate::element::Element;
-use crate::RenderContext;
+use crate::style::Color;
+use crate::element::{Element, Root};
+use crate::{math, RenderContext};
 
 struct ActiveApplication {
     window: Rc<Window>,
@@ -22,7 +22,7 @@ struct ActiveApplication {
     surface: Surface<Rc<Window>, Rc<Window>>,
 }
 
-pub struct Application {
+pub struct Application<A> {
     active: Option<ActiveApplication>,
 
     font_system: FontSystem,
@@ -30,11 +30,12 @@ pub struct Application {
 
     scale_factor: f32,
 
-    to_draw: Element
+    state: A,
+    to_draw: Root<A>
 }
 
-impl Application {
-    pub fn new(to_draw: Element) -> Self {
+impl<A> Application<A> {
+    pub fn new(state: A, to_draw: Root<A>) -> Self {
         Application {
             active: None,
             font_system: FontSystem::new(),
@@ -42,6 +43,7 @@ impl Application {
 
             scale_factor: 1.0,
 
+            state,
             to_draw
         }
     }
@@ -54,7 +56,7 @@ impl Application {
     }
 }
 
-impl winit::application::ApplicationHandler for Application {
+impl<A> winit::application::ApplicationHandler for Application<A> {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         let window = Rc::new(event_loop.create_window(WindowAttributes::default()).unwrap());
         let context = softbuffer::Context::new(Rc::clone(&window)).unwrap();
@@ -74,7 +76,11 @@ impl winit::application::ApplicationHandler for Application {
         match event {
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
                 self.scale_factor = scale_factor as f32;
-                // todo update element
+                let window_size = window.inner_size();
+                self.to_draw.set_viewport(math::Size::new(window_size.width as f32 / self.scale_factor, window_size.height as f32 / self.scale_factor))
+            }
+            WindowEvent::Resized(new_size) => {
+                self.to_draw.set_viewport(math::Size::new(new_size.width as f32 / self.scale_factor, new_size.height as f32 / self.scale_factor))
             }
             WindowEvent::RedrawRequested => {
                 let size = window.inner_size();
@@ -93,6 +99,8 @@ impl winit::application::ApplicationHandler for Application {
                 //         pixmap.fill_rect(tiny_skia::Rect::from_xywh(x as f32, y as f32, w as f32, h as f32).unwrap(), &paint, tiny_skia::Transform::identity(), None);
                 //     });
                 // }
+
+                self.to_draw.update_layout();
 
                 let mut render_context = RenderContext {
                     canvas: pixmap,
