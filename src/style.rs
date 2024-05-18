@@ -35,7 +35,7 @@ impl From<Color> for cosmic_text::Color {
 
 impl From<Color> for tiny_skia::Color {
     fn from(value: Color) -> Self {
-        // when writing to a buffer we need to swap b and r
+        // when writing to a `softbuffer::Buffer` we need to swap b and r
         tiny_skia::Color::from_rgba8(value.b, value.g, value.r, value.a)
     }
 }
@@ -84,4 +84,11 @@ pub struct LayoutStyle {
     pub main_direction: Direction,
     pub main_justify: Justify,
     pub cross_justify: Justify
+}
+
+
+impl LayoutStyle {
+    pub fn spacing_size(&self) -> math::SizeRect {
+        self.margin + math::SizeRect::from_border(self.border_size) + self.padding
+    }
 }

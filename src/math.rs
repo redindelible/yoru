@@ -1,4 +1,4 @@
-use std::ops::{Add, Sub};
+use std::ops::{Add, Mul, Sub};
 
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Default)]
@@ -29,6 +29,11 @@ impl Point {
     }
 }
 
+impl From<(f32, f32)> for Point {
+    fn from(value: (f32, f32)) -> Self {
+        Point { x: value.0, y: value.1 }
+    }
+}
 
 #[derive(Copy, Clone, PartialEq, Debug)]
 pub struct Size {
@@ -85,6 +90,28 @@ impl Sub for Size {
         Size {
             vertical: self.vertical - rhs.vertical,
             horizontal: self.horizontal - rhs.horizontal
+        }
+    }
+}
+
+impl Mul<f32> for Size {
+    type Output = Size;
+
+    fn mul(self, rhs: f32) -> Self::Output {
+        Size {
+            vertical: self.vertical * rhs,
+            horizontal: self.horizontal * rhs
+        }
+    }
+}
+
+impl Mul<Size> for f32 {
+    type Output = Size;
+
+    fn mul(self, rhs: Size) -> Self::Output {
+        Size {
+            vertical: self * rhs.vertical,
+            horizontal: self * rhs.horizontal
         }
     }
 }
@@ -146,6 +173,10 @@ impl Rect {
 
     pub fn height(&self) -> f32 {
         self.h
+    }
+
+    pub fn top_left(&self) -> Point {
+        Point::new(self.x, self.y)
     }
 
     pub fn size(&self) -> Size {
@@ -266,6 +297,19 @@ impl Sub for SizeRect {
             right: self.right - rhs.right,
             top: self.top - rhs.top,
             bottom: self.bottom - rhs.bottom,
+        }
+    }
+}
+
+impl Mul<SizeRect> for f32 {
+    type Output = SizeRect;
+
+    fn mul(self, rhs: SizeRect) -> Self::Output {
+        SizeRect {
+            left: self * rhs.left,
+            right: self * rhs.right,
+            top: self * rhs.top,
+            bottom: self * rhs.bottom
         }
     }
 }

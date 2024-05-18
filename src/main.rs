@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::cell::{Cell, RefCell};
 use std::ops::{IndexMut};
 use std::rc::{Rc, Weak};
@@ -16,14 +17,8 @@ use crate::math::Axis;
 use crate::style::{Color, Direction, Justify, LayoutStyle, Sizing};
 
 pub struct RenderContext<'a> {
-    canvas: PixmapMut<'a>,
-    transform: tiny_skia::Transform
+    pub canvas: PixmapMut<'a>,
 }
-
-// struct Layout {
-//     top_left: (f32, f32),
-//     margin_size: (f32, f32)
-// }
 
 pub trait Widget<A> {
     fn layout_cache(&self) -> &LayoutCache<A>;
@@ -34,44 +29,7 @@ pub trait Widget<A> {
 
     fn update_layout(&mut self);
 
-    // fn update(&mut self, layout: &Layout);
-
-    // fn min_content_size(&self) -> BoxSize;
-
     fn draw(&mut self, context: &mut RenderContext, layout: &Layout);
-
-    // fn border_box(&self, margin_box: Rect) -> Rect {
-    //     let attrs = self.props().attrs();
-    //
-    //     let left = margin_box.left() + attrs.margin.left + attrs.border.thickness / 2.0;
-    //     let right = left.max(margin_box.right() - attrs.margin.right - attrs.border.thickness / 2.0);
-    //     let top = margin_box.top() + attrs.margin.top + attrs.border.thickness / 2.0;
-    //     let bottom = top.max(margin_box.bottom() - attrs.margin.bottom - attrs.border.thickness / 2.0);
-    //
-    //     Rect::from_ltrb(left, top, right, bottom).unwrap()
-    // }
-    //
-    // fn padding_box(&self, margin_box: Rect) -> Rect {
-    //     let attrs = self.props().attrs();
-    //
-    //     let left = margin_box.left() + attrs.margin.left + attrs.border.thickness;
-    //     let right = left.max(margin_box.right() - attrs.margin.right - attrs.border.thickness);
-    //     let top = margin_box.top() + attrs.margin.top + attrs.border.thickness;
-    //     let bottom = top.max(margin_box.bottom() - attrs.margin.bottom - attrs.border.thickness);
-    //
-    //     Rect::from_ltrb(left, top, right, bottom).unwrap()
-    // }
-    //
-    // fn content_box(&self, margin_box: Rect) -> Rect {
-    //     let attrs = self.props().attrs();
-    //
-    //     let left = margin_box.left() + attrs.margin.left + attrs.border.thickness + attrs.padding.left;
-    //     let right = left.max(margin_box.right() - attrs.margin.right - attrs.border.thickness - attrs.padding.right);
-    //     let top = margin_box.top() + attrs.margin.top + attrs.border.thickness + attrs.padding.top;
-    //     let bottom = top.max(margin_box.bottom() - attrs.margin.bottom - attrs.border.thickness - attrs.padding.bottom);
-    //
-    //     Rect::from_ltrb(left, top, right, bottom).unwrap()
-    // }
 }
 
 
@@ -97,6 +55,127 @@ fn to_tiny_skia_path<S: Shape>(shape: S) -> tiny_skia::Path {
         }
     }
     path_builder.finish().unwrap()
+}
+
+
+thread_local! {
+    static FONTS: RefCell<cosmic_text::FontSystem> = RefCell::new(cosmic_text::FontSystem::new());
+    static SWASH_CACHE: RefCell<cosmic_text::SwashCache> = RefCell::new(cosmic_text::SwashCache::new());
+}
+
+
+struct Label<A> {
+    layout_cache: LayoutCache<A>,
+
+    font_size: f32,
+
+    changed: Changed,
+    text: String,
+    compute: Box<dyn Fn(&mut A) -> String>,
+
+    sizing_buffer: cosmic_text::Buffer,
+    buffer: cosmic_text::Buffer
+}
+
+impl<A> Label<A> {
+    fn new(compute: impl (Fn(&mut A) -> String) + 'static) -> Label<A> {
+        let font_size = 15.0;
+        let default_metrics = cosmic_text::Metrics { font_size, line_height: font_size };
+
+        let sizing_buffer = FONTS.with_borrow_mut(|fonts| {
+            let mut buffer = cosmic_text::Buffer::new(fonts, default_metrics);
+            buffer.set_size(fonts, f32::INFINITY, f32::INFINITY);
+            buffer
+        });
+
+        Label {
+            layout_cache: LayoutCache::new(LayoutStyle {
+                border_size: 0.0,
+                padding: 2.0.into(),
+                margin: 0.0.into(),
+                width: Sizing::Fit,
+                height: Sizing::Fit,
+                // todo make a ContainerLayoutCache so that leaf elements don't need this?
+                main_axis: Axis::Vertical,
+                main_direction: Direction::Positive,
+                main_justify: Justify::Min,
+                cross_justify: Justify::Min
+            }),
+
+            font_size,
+
+            changed: Changed::untracked(true),
+            text: String::new(),
+            compute: Box::new(compute),
+
+            sizing_buffer,
+            buffer: FONTS.with_borrow_mut(|fonts| {
+                cosmic_text::Buffer::new(fonts, default_metrics)
+            })
+        }
+    }
+}
+
+impl<A> Widget<A> for Label<A> {
+    fn layout_cache(&self) -> &LayoutCache<A> {
+        &self.layout_cache
+    }
+
+    fn layout_cache_mut(&mut self) -> &mut LayoutCache<A> {
+        &mut self.layout_cache
+    }
+
+    fn intrinsic_size(&self) -> ContentInfo {
+        let max_width = self.sizing_buffer.layout_runs().map(|run| run.line_w).max_by(f32::total_cmp).unwrap_or(0.0);
+        let total_height = self.sizing_buffer.lines.len() as f32 * self.sizing_buffer.metrics().line_height;
+        ContentInfo::new_for_leaf(self.layout_cache().attrs(), math::Size::new(max_width, total_height))
+    }
+
+    fn update_model(&mut self, model: &mut A) {
+        if self.changed.is_changed() {
+            let (changed, text) = Changed::run_and_track(|| (self.compute)(model));
+            self.text = text;
+            FONTS.with_borrow_mut(|fonts| {
+                self.buffer.set_text(fonts, &self.text, cosmic_text::Attrs::new(), cosmic_text::Shaping::Advanced);
+                self.sizing_buffer.set_text(fonts, &self.text, cosmic_text::Attrs::new(), cosmic_text::Shaping::Advanced);
+            });
+
+            self.layout_cache.invalidate();
+            self.changed = changed;
+        }
+    }
+
+    fn update_layout(&mut self) {
+        let (layout, was_updated) = self.layout_cache().update_layout_leaf();
+        if was_updated {
+            FONTS.with_borrow_mut(|fonts| {
+                self.buffer.set_metrics_and_size(fonts, cosmic_text::Metrics {
+                    font_size: self.font_size * layout.scale_factor,
+                    line_height: self.font_size * layout.scale_factor,
+                }, layout.content_box.width(), layout.content_box.height());
+            });
+        }
+    }
+
+    fn draw(&mut self, context: &mut RenderContext, layout: &Layout) {
+        FONTS.with_borrow_mut(|fonts| {
+            SWASH_CACHE.with_borrow_mut(|swash_cache| {
+                let mut paint = tiny_skia::Paint::default();
+                let content_top_left = layout.content_box.top_left();
+                self.buffer.draw(fonts, swash_cache, Color::BLACK.into(), |x, y, w, h, color| {
+                    paint.set_color(tiny_skia::Color::from_rgba8(color.r(), color.g(), color.b(), color.a()));
+                    // context.canvas.fill_rect(tiny_skia::Rect::from_xywh(x as f32 + content_top_left.x, y as f32 + content_top_left.y, w as f32, h as f32).unwrap(), &paint, context.transform, None);
+                    context.canvas.fill_rect(tiny_skia::Rect::from_xywh(x as f32 + content_top_left.x, y as f32 + content_top_left.y, w as f32, h as f32).unwrap(), &paint, tiny_skia::Transform::identity(), None);
+                });
+            });
+        });
+    }
+}
+
+impl<A: 'static> From<Label<A>> for Element<A> {
+    fn from(value: Label<A>) -> Self {
+        Element::new(value)
+    }
 }
 
 
@@ -143,9 +222,6 @@ impl<A> Div<A> {
 impl<A: 'static> From<Div<A>> for Element<A> {
     fn from(value: Div<A>) -> Self {
         Element::new(value)
-        // unsafe {
-        //     Element(Box::new(std::mem::transmute::<Div<A>, Div<A>>(value)))
-        // }
     }
 }
 
@@ -154,35 +230,35 @@ impl<A> Widget<A> for Div<A> {
     fn layout_cache_mut(&mut self) -> &mut LayoutCache<A> { &mut self.layout_cache }
 
     fn intrinsic_size(&self) -> ContentInfo {
-        self.layout_cache.get_intrinsic_size(&self.children)
+        self.layout_cache.get_intrinsic_size_with_children(&self.children)
     }
 
     fn update_model(&mut self, model: &mut A) {
         // todo the caching needs to be tracked somehow
         //   similar to layout, but the current doesn't need to be rerun if a child is out of date
-        // for child in &mut self.children {
-        //     child.
-        // }
+        for child in &mut self.children {
+            child.update_model(model);
+        }
     }
 
     fn update_layout(&mut self) {
-        self.layout_cache.update_layout(&self.children);
+        self.layout_cache.update_layout_with_children(&self.children);
         for child in &mut self.children {
             child.update_layout();
         }
     }
 
-    fn draw(&mut self, mut context: &mut RenderContext, layout: &Layout) {
-        let border = self.layout_cache.attrs().border_size;
+    fn draw(&mut self, context: &mut RenderContext, layout: &Layout) {
+        let border_size = self.layout_cache.attrs().border_size * layout.scale_factor;
         if let Some(border_color) = self.border_color {
-            if border > 0.0 {
+            if border_size > 0.0 {
                 let border_box = layout.border_box;
                 let path = to_tiny_skia_path(kurbo::Rect::from(border_box));
                 let mut stroke = tiny_skia::Stroke::default();
-                stroke.width = border;
+                stroke.width = border_size;
                 let mut paint = tiny_skia::Paint::default();
                 paint.set_color(border_color.into());
-                context.canvas.stroke_path(&path, &paint, &stroke, context.transform, None);
+                context.canvas.stroke_path(&path, &paint, &stroke, tiny_skia::Transform::identity(), None);
             }
         }
 
@@ -191,10 +267,8 @@ impl<A> Widget<A> for Div<A> {
 
             let mut paint = tiny_skia::Paint::default();
             paint.set_color(background.into());
-            context.canvas.fill_rect(padding_box.into(), &paint, context.transform, None);
+            context.canvas.fill_rect(padding_box.into(), &paint, tiny_skia::Transform::identity(), None);
         }
-
-        dbg!(layout);
 
         for child in &mut self.children {
             child.draw(context);
@@ -301,8 +375,8 @@ struct Changed {
 }
 
 impl Changed {
-    fn untracked() -> Changed {
-        Changed { dirty: Rc::new(Cell::new(false)) }
+    fn untracked(initial: bool) -> Changed {
+        Changed { dirty: Rc::new(Cell::new(initial)) }
     }
 
     fn is_changed(&self) -> bool {
@@ -332,7 +406,7 @@ struct Select<A, S, O> {
 impl<A, S, O> Select<A, S, O> where O: IndexMut<S, Output=Element<A>> + 'static, S: Copy + 'static {
     fn new(starting: S, options: O, selector: impl (Fn(&mut A) -> S) + 'static) -> Self {
         Select {
-            dirty: Changed::untracked(),
+            dirty: Changed::untracked(true),
             cached: Cell::new(starting),
             options,
             selector: Box::new(selector),
@@ -454,20 +528,31 @@ impl<A, S, O> Widget<A> for Select<A, S, O> where O: IndexMut<S, Output=Element<
 //     }
 // }
 
+const EXAMPLE_TEXT: &'static str = r"Lorem ipsum dolor sit amet, consectetur adipiscing elit. Donec tincidunt nunc lacus, nec finibus dolor sollicitudin tristique. Suspendisse sed magna sed felis fringilla tempus vel sit amet arcu. Praesent quis quam a nibh pretium blandit. Phasellus viverra nunc tempus ullamcorper euismod. Curabitur consequat posuere dolor, vitae auctor velit viverra eget. Nullam pellentesque rutrum enim, vitae congue nunc lacinia blandit. Nullam at nibh lacus. Suspendisse purus neque, venenatis at pulvinar sit amet, semper eu tortor. Nulla facilisi. Interdum et malesuada fames ac ante ipsum primis in faucibus.
+
+Vestibulum id aliquam magna. Nullam tristique consequat luctus. Proin sodales eu est ut efficitur. Donec pulvinar sed massa id bibendum. Aliquam erat volutpat. Nulla ac porttitor nibh, id dignissim enim. Aenean sed congue nunc. Cras ac pulvinar arcu. Praesent ultricies volutpat est non tempor. Mauris luctus orci nec purus aliquam malesuada. Sed mi enim, gravida sit amet arcu et, egestas convallis risus.
+
+Donec volutpat sapien id justo rhoncus, id maximus magna blandit. Vestibulum ac suscipit nisi. Morbi sit amet magna magna. Fusce consequat lorem eu lectus luctus interdum. Sed quam mauris, vehicula nec blandit ut, ornare eget nulla. Nulla bibendum vulputate leo, id rhoncus erat vulputate quis. Aliquam erat volutpat. Sed accumsan consequat lorem eu vehicula. Vestibulum aliquet lectus vel lacus rutrum iaculis. Pellentesque augue nisi, feugiat et nunc at, condimentum ultricies mi. Integer lacinia, justo congue aliquet bibendum, nunc felis fringilla augue, sit amet malesuada odio nunc sed neque. Proin non mi commodo nulla mollis lacinia vel sed sapien.
+
+Phasellus sit amet scelerisque nulla. Sed ante metus, rhoncus et elit non, bibendum lacinia dui. Integer non efficitur nibh, in faucibus leo. Aenean quis scelerisque purus. Etiam scelerisque, nunc luctus rutrum vehicula, orci magna facilisis nibh, eu vulputate neque ipsum eget quam. Phasellus sit amet augue purus. Morbi ut ex quis neque ornare scelerisque.
+
+Aenean porta iaculis eleifend. Nam pulvinar quis sapien ut congue. Suspendisse ut malesuada mauris, faucibus sollicitudin magna. Fusce ac dui eu elit consectetur ultrices. Curabitur consectetur elementum imperdiet. Ut maximus neque elit, vitae hendrerit purus laoreet ut. Sed hendrerit pellentesque rutrum. Etiam iaculis sem nec lorem placerat, rhoncus scelerisque lectus scelerisque. Aliquam suscipit vel nunc sed efficitur. Praesent tempor erat velit, sed ornare tellus finibus nec. Nulla eget metus erat. Mauris non porta lectus, nec vestibulum arcu. Nam sem ante, pretium ut ex vel, venenatis pretium ligula.";
+
+
+fn assert_send<T: Sync>(_: &T) {
+
+}
+
 
 fn main() {
-    // let mut example_app = ExampleAppState::new();
-    // let mut view = ExampleAppState::create_view();
-    // given(&mut view, &mut example_app);
+    let model = 7;
 
-    let mut model = 7;
-
-    let mut b: Element<i32> = div!(width=Sizing::Fit, margin=10.0, background=Color::LIGHT_GRAY, [
-        div!(width=Sizing::Expand, height=Sizing::Fixed(10.0))
+    let b: Element<i32> = div!(width=Sizing::Fit, margin=10.0, background=Color::LIGHT_GRAY, [
+        div!(width=Sizing::Expand, height=Sizing::Fixed(10.0)),
+        Label::new(|_| EXAMPLE_TEXT.into())
     ]).into();
 
-    // b.update_model(&mut model);
-    // b.update(Rect::from_xywh(0.0, 0.0, 100.0, 100.0).unwrap());
-    //
+    // assert_send(&div!());
+
     Application::new(model, Root::new(b)).run();
 }

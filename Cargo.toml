@@ -5,6 +5,12 @@ edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+[profile.dev.package.cosmic-text]
+opt-level = 3
+
+[profile.dev.package.tiny-skia]
+opt-level = 3
+
 [dependencies]
 tiny-skia = "0.11.4"
 cosmic-text = "0.11.2"
@@ -12,4 +18,4 @@ kurbo = "0.11.0"
 winit = "0.30.0"
 env_logger = "0.11.3"
 softbuffer = "0.4.2"
-bytemuck = "1.15.0"
+bytemuck = { version = "1.14.0", features = ["must_cast"] }
