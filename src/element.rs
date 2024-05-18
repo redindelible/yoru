@@ -77,48 +77,70 @@ impl<A> Element<A> {
     }
 }
 
+struct LayoutFlags {
+    size_dirty: Cell<bool>,
+    layout_dirty: Cell<bool>,
+    // scale_factor_dirty: Cell<bool>
+}
+
+impl LayoutFlags {
+    fn new(dirty: bool) -> LayoutFlags {
+        LayoutFlags {
+            size_dirty: Cell::new(dirty),
+            layout_dirty: Cell::new(dirty),
+            // scale_factor_dirty: Cell::new(dirty)
+        }
+    }
+
+    fn set_all(&self, value: bool) {
+        self.size_dirty.set(value);
+        self.layout_dirty.set(value);
+        // self.scale_factor_dirty.set(value);
+    }
+}
+
 pub struct LayoutInvalidator(Rc<LayoutInvalidatorInner>);
 
 struct LayoutInvalidatorInner {
-    dirty: Cell<(bool, bool)>,
+    dirty: LayoutFlags,
     parent: RefCell<Option<Weak<LayoutInvalidatorInner>>>
 }
 
 impl LayoutInvalidator {
     fn new(dirty: bool) -> LayoutInvalidator {
         LayoutInvalidator(Rc::new(LayoutInvalidatorInner {
-            dirty: Cell::new((dirty, dirty)),
+            dirty: LayoutFlags::new(dirty),
             parent: RefCell::new(None)
         }))
     }
 
     fn is_size_dirty(&self) -> bool {
-        self.0.dirty.get().0
+        self.0.dirty.size_dirty.get()
     }
 
     fn is_layout_dirty(&self) -> bool {
-        self.0.dirty.get().1
+        self.0.dirty.layout_dirty.get()
     }
 
     fn set_layout_dirty_untracked(&self) {
-        self.0.dirty.set((self.0.dirty.get().0, true));
+        self.0.dirty.layout_dirty.set(true);
     }
 
     fn reset_size(&self) {
-        self.0.dirty.set((false, self.0.dirty.get().1));
+        self.0.dirty.size_dirty.set(false);
     }
 
     fn reset_layout_dirty(&self) {
-        self.0.dirty.set((self.0.dirty.get().0, false));
+        self.0.dirty.layout_dirty.set(false);
     }
 
     fn invalidate(&self) {
         // todo this can be folded into the loop
-        self.0.dirty.set((true, true));
+        self.0.dirty.set_all(true);
 
         let mut curr = self.0.parent.borrow().as_ref().and_then(Weak::upgrade);
         while let Some(strong_curr) = curr {
-            strong_curr.dirty.set((true, true));
+            strong_curr.dirty.set_all(true);
             curr = strong_curr.parent.borrow().as_ref().and_then(Weak::upgrade);
         }
     }
@@ -241,7 +263,7 @@ mod props {
 
             let (known_width, known_height) = (
                 self.attrs.width.as_definite().map(|width| width * self.scale_factor.get()),
-                self.attrs.height.as_definite().map(|width| width * self.scale_factor.get())
+                self.attrs.height.as_definite().map(|height| height * self.scale_factor.get())
             );
 
             let mut total_main_size: f32 = 0.0;
@@ -318,6 +340,10 @@ mod props {
 
         pub fn update_layout_with_children(&self, children: &[Element<A>]) -> Layout {
             if self.invalidator.is_layout_dirty() {
+                for child in children {
+                    child.0.layout_cache().set_scale_factor(self.scale_factor.get());
+                }
+
                 let main_axis = self.attrs.main_axis;
                 let cross_axis = main_axis.cross();
 
@@ -385,7 +411,6 @@ mod props {
                             curr -= main_axis_amount;
                         }
                     };
-                    child.0.layout_cache().set_scale_factor(self.scale_factor.get());
                     child.0.layout_cache().set_allocated(allocated);
                 }
 
