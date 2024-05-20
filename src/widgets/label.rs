@@ -1,12 +1,70 @@
 use std::cell::RefCell;
+use std::collections::HashMap;
 use crate::{BoxLayout, Changed, Color, ComputedLayout, Direction, Element, Justify, Layout, LayoutInput, LayoutStyle, math, RenderContext, Sizing};
 use crate::math::Axis;
 use crate::widgets::Widget;
 
 thread_local! {
     static FONTS: RefCell<cosmic_text::FontSystem> = RefCell::new(cosmic_text::FontSystem::new());
-    static SWASH_CACHE: RefCell<cosmic_text::SwashCache> = RefCell::new(cosmic_text::SwashCache::new());
+    static GLYPH_CACHE: RefCell<GlyphCache> = RefCell::new(GlyphCache::new());
 }
+
+
+struct CachedGlyph {
+    offset: (i32, i32),
+    image: Option<tiny_skia::Pixmap>
+}
+
+struct GlyphCache {
+    swash_cache: cosmic_text::SwashCache,
+    cached_glyphs: HashMap<cosmic_text::CacheKey, CachedGlyph>
+}
+
+impl GlyphCache {
+    fn new() -> GlyphCache {
+        GlyphCache {
+            swash_cache: cosmic_text::SwashCache::new(),
+            cached_glyphs: HashMap::new()
+        }
+    }
+
+    fn get_glyph(&mut self, fonts: &mut cosmic_text::FontSystem, key: cosmic_text::CacheKey) -> &CachedGlyph {
+        self.cached_glyphs.entry(key)
+            .or_insert_with_key(|&key| Self::render(fonts, &mut self.swash_cache, key))
+    }
+
+    fn render(fonts: &mut cosmic_text::FontSystem, swash_cache: &mut cosmic_text::SwashCache, key: cosmic_text::CacheKey) -> CachedGlyph {
+        if let Some(swash_image) = swash_cache.get_image_uncached(fonts, key) {
+            if let Some(mut image) = tiny_skia::Pixmap::new(swash_image.placement.width, swash_image.placement.height) {
+                let mask = tiny_skia::Mask::from_vec(swash_image.data, tiny_skia::IntSize::from_wh(swash_image.placement.width, swash_image.placement.height).unwrap()).unwrap();
+                let mut paint = tiny_skia::Paint::default();
+                paint.set_color(Color::BLACK.into());
+
+                image.fill_rect(tiny_skia::Rect::from_xywh(
+                    0.0, 0.0,
+                    swash_image.placement.width as f32,
+                    swash_image.placement.height as f32
+                ).unwrap(), &paint, tiny_skia::Transform::identity(), Some(&mask));
+
+                CachedGlyph {
+                    offset: (swash_image.placement.left, swash_image.placement.top),
+                    image: Some(image)
+                }
+            } else {
+                CachedGlyph {
+                    offset: (swash_image.placement.left, swash_image.placement.top),
+                    image: None
+                }
+            }
+        } else {
+            CachedGlyph {
+                offset: (0, 0),
+                image: None
+            }
+        }
+    }
+}
+
 
 
 pub struct Label<A> {
@@ -107,7 +165,7 @@ impl<A> Widget<A> for Label<A> {
                 layout.content_box.width(), layout.content_box.height()
             );
 
-            SWASH_CACHE.with_borrow_mut(|swash_cache| {
+            GLYPH_CACHE.with_borrow_mut(|glyph_cache| {
                 let mut paint = tiny_skia::Paint::default();
                 paint.set_color(Color::BLACK.into());
                 let content_top_left = layout.content_box.top_left();
@@ -116,37 +174,17 @@ impl<A> Widget<A> for Label<A> {
                     for glyph in run.glyphs {
                         let physical_glyph = glyph.physical((content_top_left.x, content_top_left.y), 1.0);
 
-                        // todo first try get_image
-                        // todo add with pixel fallback
-                        if let Some(commands) = swash_cache.get_outline_commands(fonts, physical_glyph.cache_key) {
-                            use cosmic_text::Command;
-
+                        let rendered_glyph = glyph_cache.get_glyph(fonts, physical_glyph.cache_key);
+                        if let Some(glyph_image) = &rendered_glyph.image {
                             let x_off = content_top_left.x + glyph.x + glyph.x_offset;
                             let y_off = content_top_left.y + glyph.y_offset + run.line_y;
 
-                            let mut path_builder = tiny_skia::PathBuilder::new();
-                            for command in commands {
-                                match command {
-                                    Command::MoveTo(point) =>
-                                        path_builder.move_to(point.x + x_off, -point.y + y_off),
-                                    Command::LineTo(point) =>
-                                        path_builder.line_to(point.x + x_off, -point.y + y_off),
-                                    Command::CurveTo(p1, p2, p3) =>
-                                        path_builder.cubic_to(p1.x + x_off, -p1.y + y_off, p2.x + x_off, -p2.y + y_off, p3.x + x_off, -p3.y + y_off),
-                                    Command::QuadTo(p1, p2) =>
-                                        path_builder.quad_to(p1.x + x_off, -p1.y + y_off, p2.x + x_off, -p2.y + y_off),
-                                    Command::Close => path_builder.close()
-                                }
-                            }
-                            if let Some(path) = path_builder.finish() {
-                                context.canvas.fill_path(
-                                    &path,
-                                    &paint,
-                                    tiny_skia::FillRule::EvenOdd,
-                                    tiny_skia::Transform::identity(),
-                                    None
-                                )
-                            }
+                            context.canvas.draw_pixmap(
+                                rendered_glyph.offset.0 + x_off as i32,
+                                -rendered_glyph.offset.1 + y_off as i32,
+                                glyph_image.as_ref(),
+                                &tiny_skia::PixmapPaint::default(), tiny_skia::Transform::identity(), None
+                            );
                         }
                     }
                 }

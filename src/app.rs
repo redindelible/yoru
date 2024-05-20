@@ -88,7 +88,8 @@ impl<A> winit::application::ApplicationHandler for Application<A> {
             }
             WindowEvent::RedrawRequested => {
                 let size = window.inner_size();
-                surface.resize(NonZeroU32::new(size.width).unwrap(), NonZeroU32::new(size.height).unwrap()).unwrap();
+                let (Some(width), Some(height)) = (NonZeroU32::new(size.width), NonZeroU32::new(size.height)) else { return; };
+                surface.resize(width, height).unwrap();
                 let mut buffer = surface.buffer_mut().unwrap();
                 let mut pixmap = PixmapMut::from_bytes(bytemuck::must_cast_slice_mut(buffer.as_mut()), size.width, size.height).unwrap();
                 pixmap.fill(Color::WHITE.into());
