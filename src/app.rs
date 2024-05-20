@@ -1,31 +1,26 @@
 use std::num::NonZeroU32;
 use std::rc::Rc;
-use std::time::Instant;
 
-use tiny_skia::{PixmapMut};
-use cosmic_text::{Attrs, FontSystem, Metrics, Shaping, SwashCache};
+use tiny_skia::PixmapMut;
 
-use winit::{
-    event_loop::EventLoop,
-    window::Window
-};
 use winit::event::WindowEvent;
-use winit::event_loop::ActiveEventLoop;
-use winit::window::{WindowAttributes, WindowId};
-use softbuffer::{Buffer, Surface};
+use winit::event_loop::{ActiveEventLoop, EventLoop};
+use winit::window::{WindowAttributes, WindowId, Window};
+use softbuffer::Surface;
+
 use crate::style::Color;
-use crate::element::{Element, Root};
+use crate::element::Root;
 use crate::{math, RenderContext};
 
 fn timed<T>(message: &str, f: impl FnOnce() -> T) -> T {
-    // f()
-    use std::time::Instant;
-
-    let now = Instant::now();
-    let ret = f();
-    let time = Instant::now() - now;
-    eprintln!("{}: {} sec", message, time.as_secs_f32());
-    ret
+    f()
+    // use std::time::Instant;
+    //
+    // let now = Instant::now();
+    // let ret = f();
+    // let time = Instant::now() - now;
+    // eprintln!("{}: {} sec", message, time.as_secs_f32());
+    // ret
 }
 
 struct ActiveApplication {
@@ -36,9 +31,6 @@ struct ActiveApplication {
 
 pub struct Application<A> {
     active: Option<ActiveApplication>,
-
-    font_system: FontSystem,
-    swash_cache: SwashCache,
 
     viewport: math::Size,
     scale_factor: f32,
@@ -51,8 +43,6 @@ impl<A> Application<A> {
     pub fn new(state: A, to_draw: Root<A>) -> Self {
         Application {
             active: None,
-            font_system: FontSystem::new(),
-            swash_cache: SwashCache::new(),
 
             viewport: math::Size::new(0.0, 0.0),
             scale_factor: 1.0,
