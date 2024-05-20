@@ -18,6 +18,7 @@ use crate::element::{Element, Root};
 use crate::{math, RenderContext};
 
 fn timed<T>(message: &str, f: impl FnOnce() -> T) -> T {
+    // f()
     use std::time::Instant;
 
     let now = Instant::now();
@@ -39,7 +40,8 @@ pub struct Application<A> {
     font_system: FontSystem,
     swash_cache: SwashCache,
 
-    // scale_factor: f32,
+    viewport: math::Size,
+    scale_factor: f32,
 
     state: A,
     to_draw: Root<A>
@@ -52,7 +54,8 @@ impl<A> Application<A> {
             font_system: FontSystem::new(),
             swash_cache: SwashCache::new(),
 
-            // scale_factor: 1.0,
+            viewport: math::Size::new(0.0, 0.0),
+            scale_factor: 1.0,
 
             state,
             to_draw
@@ -73,7 +76,8 @@ impl<A> winit::application::ApplicationHandler for Application<A> {
         let context = softbuffer::Context::new(Rc::clone(&window)).unwrap();
         let surface = Surface::new(&context, Rc::clone(&window)).unwrap();
 
-        self.to_draw.set_scale_factor(window.scale_factor() as f32);
+        // self.viewport =
+        self.scale_factor = window.scale_factor() as f32;
         self.active = Some(ActiveApplication {
             window,
             context,
@@ -86,10 +90,10 @@ impl<A> winit::application::ApplicationHandler for Application<A> {
 
         match event {
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
-                self.to_draw.set_scale_factor(scale_factor as f32);
+                self.scale_factor = scale_factor as f32;
             }
             WindowEvent::Resized(new_size) => {
-                self.to_draw.set_viewport(math::Size::new(new_size.width as f32, new_size.height as f32));
+                self.viewport = math::Size::new(new_size.width as f32, new_size.height as f32);
                 window.request_redraw();
             }
             WindowEvent::RedrawRequested => {
@@ -100,7 +104,7 @@ impl<A> winit::application::ApplicationHandler for Application<A> {
                 pixmap.fill(Color::WHITE.into());
 
                 timed("Update Model", || self.to_draw.update_model(&mut self.state));
-                timed("Update Layout", || self.to_draw.update_layout());
+                timed("Update Layout", || self.to_draw.compute_layout(self.viewport, self.scale_factor));
 
                 let mut render_context = RenderContext {
                     canvas: pixmap
@@ -113,6 +117,9 @@ impl<A> winit::application::ApplicationHandler for Application<A> {
             WindowEvent::CloseRequested => {
                 self.active = None;
                 event_loop.exit();
+            }
+            WindowEvent::MouseInput { .. } => {
+                window.request_redraw();
             }
             _ => { }
         }

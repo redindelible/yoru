@@ -49,11 +49,11 @@ pub enum Sizing {
 }
 
 impl Sizing {
-    pub fn as_definite(&self) -> Option<f32> {
+    pub fn as_definite(&self, scale_factor: f32) -> Option<f32> {
         match self {
             Sizing::Expand => None,
             Sizing::Fit => None,
-            Sizing::Fixed(size) => Some(*size)
+            Sizing::Fixed(size) => Some(*size * scale_factor)
         }
     }
 }

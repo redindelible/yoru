@@ -1,4 +1,6 @@
 use std::ops::{Add, Mul, Sub};
+use bytemuck::{Pod, Zeroable};
+use crate::style::Direction;
 
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Default)]
@@ -17,7 +19,8 @@ impl Axis {
     }
 }
 
-#[derive(Copy, Clone, PartialEq, Debug)]
+#[repr(C)]
+#[derive(Copy, Clone, PartialEq, Debug, Zeroable, Pod)]
 pub struct Point {
     pub x: f32,
     pub y: f32
@@ -35,7 +38,8 @@ impl From<(f32, f32)> for Point {
     }
 }
 
-#[derive(Copy, Clone, PartialEq, Debug)]
+#[derive(Copy, Clone, PartialEq, Debug, Zeroable, Pod)]
+#[repr(C)]
 pub struct Size {
     pub vertical: f32,
     pub horizontal: f32
@@ -55,6 +59,14 @@ impl Size {
 
     pub fn from_border(size: f32) -> Size {
         Size::new(2.0 * size, 2.0 * size)
+    }
+
+    pub fn width(&self) -> f32 {
+        self.horizontal
+    }
+
+    pub fn height(&self) -> f32 {
+        self.vertical
     }
 
     pub fn axis(&self, axis: Axis) -> f32 {
@@ -117,7 +129,9 @@ impl Mul<Size> for f32 {
 }
 
 
-#[derive(Copy, Clone, PartialEq, Debug)]
+
+#[derive(Copy, Clone, PartialEq, Debug, Zeroable, Pod)]
+#[repr(C)]
 pub struct Rect {
     pub x: f32,
     pub y: f32,
@@ -213,7 +227,8 @@ impl From<Rect> for kurbo::Rect {
     }
 }
 
-#[derive(Copy, Clone, PartialEq, Debug)]
+#[derive(Copy, Clone, PartialEq, Debug, Zeroable, Pod)]
+#[repr(C)]
 pub struct SizeRect {
     pub left: f32,
     pub right: f32,

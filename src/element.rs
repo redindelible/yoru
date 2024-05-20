@@ -1,9 +1,11 @@
 use std::cell::{Cell, RefCell};
+use std::convert::identity;
 use std::rc::{Rc, Weak};
+use bytemuck::{Pod, Zeroable};
 use crate::{math, RenderContext, Widget};
 
 // pub use props::{LayoutCache};
-pub use props::{LayoutCache, ContentInfo, Layout};
+pub use props::{BoxLayout, ContentInfo, Layout};
 
 
 pub struct Root<A>(Element<A>);
@@ -13,20 +15,15 @@ impl<A> Root<A> {
         Root(element)
     }
 
-    pub fn set_scale_factor(&mut self, scale_factor: f32) {
-        self.0.0.layout_cache().set_scale_factor(scale_factor);
-    }
-
-    pub fn set_viewport(&mut self, viewport: math::Size) {
-        self.0.0.layout_cache().set_allocated(math::Rect::from_topleft_size((0.0, 0.0).into(), viewport));
-    }
-
     pub fn update_model(&mut self, model: &mut A) {
         self.0.update_model(model);
     }
 
-    pub fn update_layout(&mut self) {
-        self.0.update_layout();
+    pub fn compute_layout(&mut self, viewport: math::Size, scale_factor: f32) {
+        self.0.compute_layout(LayoutInput::FinalLayout {
+            allocated: math::Rect::from_topleft_size((0.0, 0.0).into(), viewport),
+            scale_factor
+        });
     }
 
     pub fn draw(&mut self, context: &mut RenderContext) {
@@ -51,11 +48,11 @@ impl<A> Element<A> {
 // }
 
 impl<A> Element<A> {
-    pub fn props(&self) -> &LayoutCache<A> {
+    pub fn props(&self) -> &BoxLayout<A> {
         self.0.layout_cache()
     }
 
-    pub fn props_mut(&mut self) -> &mut LayoutCache<A> {
+    pub fn props_mut(&mut self) -> &mut BoxLayout<A> {
         self.0.layout_cache_mut()
     }
 
@@ -63,99 +60,134 @@ impl<A> Element<A> {
         self.0.update_model(model)
     }
 
-    pub fn intrinsic_size(&self) -> ContentInfo {
-        self.0.intrinsic_size()
-    }
-
-    pub fn update_layout(&mut self) {
-        self.0.update_layout();
+    pub fn compute_layout(&mut self, input: LayoutInput) -> ComputedLayout {
+        self.0.compute_layout(input)
     }
 
     pub fn draw(&mut self, context: &mut RenderContext) {
-        let layout = self.0.layout_cache().get_cached_layout();
+        let layout = self.0.layout_cache().get_final_layout().unwrap_or_else(identity);
         self.0.draw(context, &layout);
     }
 }
 
-struct LayoutFlags {
-    size_dirty: Cell<bool>,
-    layout_dirty: Cell<bool>,
-    // scale_factor_dirty: Cell<bool>
+#[derive(Copy, Clone, PartialEq, Debug, Zeroable, Pod)]
+#[repr(C)]
+pub struct ComputedLayout {
+    margin_box: math::Rect
 }
 
-impl LayoutFlags {
-    fn new(dirty: bool) -> LayoutFlags {
-        LayoutFlags {
-            size_dirty: Cell::new(dirty),
-            layout_dirty: Cell::new(dirty),
-            // scale_factor_dirty: Cell::new(dirty)
+pub struct LayoutCache(Rc<LayoutCacheInner>);
+
+struct CachedLayout {
+    is_valid: Cell<bool>,
+    with_input: Cell<LayoutInput>,
+    cached: Cell<ComputedLayout>
+}
+
+impl CachedLayout {
+    pub fn new_invalid() -> CachedLayout {
+        CachedLayout {
+            is_valid: Cell::new(false),
+            with_input: Cell::new(LayoutInput::ComputeSize {
+                available: Zeroable::zeroed(),
+                scale_factor: Zeroable::zeroed(),
+            }),
+            cached: Zeroable::zeroed()
         }
     }
-
-    fn set_all(&self, value: bool) {
-        self.size_dirty.set(value);
-        self.layout_dirty.set(value);
-        // self.scale_factor_dirty.set(value);
-    }
 }
 
-pub struct LayoutInvalidator(Rc<LayoutInvalidatorInner>);
-
-struct LayoutInvalidatorInner {
-    dirty: LayoutFlags,
-    parent: RefCell<Option<Weak<LayoutInvalidatorInner>>>
+struct LayoutCacheInner {
+    parent: RefCell<Option<Weak<LayoutCacheInner>>>,
+    cached_unknown: CachedLayout,
+    cached_known: CachedLayout,
+    cached_final: CachedLayout,
 }
 
-impl LayoutInvalidator {
-    fn new(dirty: bool) -> LayoutInvalidator {
-        LayoutInvalidator(Rc::new(LayoutInvalidatorInner {
-            dirty: LayoutFlags::new(dirty),
-            parent: RefCell::new(None)
+impl LayoutCache {
+    fn new() -> LayoutCache {
+        LayoutCache(Rc::new(LayoutCacheInner {
+            parent: RefCell::new(None),
+            cached_unknown: CachedLayout::new_invalid(),
+            cached_known: CachedLayout::new_invalid(),
+            cached_final: CachedLayout::new_invalid()
         }))
     }
 
-    fn is_size_dirty(&self) -> bool {
-        self.0.dirty.size_dirty.get()
-    }
-
-    fn is_layout_dirty(&self) -> bool {
-        self.0.dirty.layout_dirty.get()
-    }
-
-    fn set_layout_dirty_untracked(&self) {
-        self.0.dirty.layout_dirty.set(true);
-    }
-
-    fn reset_size(&self) {
-        self.0.dirty.size_dirty.set(false);
-    }
-
-    fn reset_layout_dirty(&self) {
-        self.0.dirty.layout_dirty.set(false);
-    }
-
     fn invalidate(&self) {
-        // todo this can be folded into the loop
-        self.0.dirty.set_all(true);
-
-        let mut curr = self.0.parent.borrow().as_ref().and_then(Weak::upgrade);
+        let mut curr = Some(Rc::clone(&self.0));
         while let Some(strong_curr) = curr {
-            strong_curr.dirty.set_all(true);
+            strong_curr.cached_unknown.is_valid.set(false);
+            strong_curr.cached_known.is_valid.set(false);
+            strong_curr.cached_final.is_valid.set(false);
             curr = strong_curr.parent.borrow().as_ref().and_then(Weak::upgrade);
+        }
+    }
+
+    fn get_or_update(&self, input: LayoutInput, f: impl FnOnce(LayoutInput) -> ComputedLayout) -> ComputedLayout {
+        let cache = match input {
+            LayoutInput::ComputeSize { available, .. } => {
+                if available.width() == f32::INFINITY || available.height() == f32::INFINITY {
+                    &self.0.cached_unknown
+                } else {
+                    &self.0.cached_known
+                }
+            },
+            LayoutInput::FinalLayout { .. } => {
+                &self.0.cached_final
+            }
+        };
+
+        if cache.is_valid.get() && cache.with_input.get() == input {
+            cache.cached.get()
+        } else {
+            let inner = f(input);
+            cache.cached.set(inner);
+            cache.with_input.set(input);
+            cache.is_valid.set(true);
+            inner
+        }
+    }
+}
+
+#[derive(Copy, Clone, PartialEq, Debug)]
+pub enum LayoutInput {
+    ComputeSize {
+        available: math::Size,
+        scale_factor: f32,
+    },
+    FinalLayout {
+        allocated: math::Rect,
+        scale_factor: f32,
+    }
+}
+
+impl LayoutInput {
+    fn available(&self) -> math::Size {
+        match self {
+            LayoutInput::ComputeSize { available, .. } => *available,
+            LayoutInput::FinalLayout { allocated, .. } => allocated.size()
+        }
+    }
+
+    pub fn scale_factor(&self) -> f32 {
+        match self {
+            LayoutInput::ComputeSize { scale_factor, .. } => *scale_factor,
+            LayoutInput::FinalLayout { scale_factor, .. } => *scale_factor,
         }
     }
 }
 
 mod props {
-    use std::cell::Cell;
     use std::marker::PhantomData;
     use std::rc::{Rc, Weak};
+    use bytemuck::Zeroable;
     use crate::style::{Direction, Justify, LayoutStyle, Sizing};
-    use crate::element::{Element, LayoutInvalidator};
+    use crate::element::{Element, LayoutInput, LayoutCache, ComputedLayout};
     use crate::math;
     use crate::math::{Axis};
 
-    #[derive(Debug, Copy, Clone, PartialEq)]
+    #[derive(Debug, Copy, Clone, PartialEq, Zeroable)]
     pub struct Layout {
         pub margin_box: math::Rect,
         pub border_box: math::Rect,
@@ -184,38 +216,18 @@ mod props {
         }
     }
 
-    pub struct LayoutCache<A> {
+    pub struct BoxLayout<A> {
         attrs: LayoutStyle,
-        invalidator: LayoutInvalidator,
+        cache: LayoutCache,
 
-        scale_factor: Cell<f32>,
-        allocated: Cell<math::Rect>,
-
-        cached_intrinsic_size: Cell<ContentInfo>,
-        cached_layout: Cell<Layout>,
         _phantom: PhantomData<fn(A)>
     }
 
-    impl<A> LayoutCache<A> {
-        pub fn new(layout_style: LayoutStyle) -> LayoutCache<A> {
-            LayoutCache {
+    impl<A> BoxLayout<A> {
+        pub fn new(layout_style: LayoutStyle) -> BoxLayout<A> {
+            BoxLayout {
                 attrs: layout_style,
-                invalidator: LayoutInvalidator::new(true),
-                scale_factor: Cell::new(1.0),
-                allocated: Cell::new(math::Rect::from_xywh(0.0, 0.0, 0.0, 0.0)),
-                cached_intrinsic_size: Cell::new(ContentInfo {
-                    total_size: math::Size::new(0.0, 0.0),
-                    content_size: math::Size::new(0.0, 0.0),
-                    total_expand_factor: 0.0,
-                    total_expand_size: 0.0,
-                }),
-                cached_layout: Cell::new(Layout {
-                    margin_box: math::Rect::from_xywh(0.0, 0.0, 0.0, 0.0),
-                    border_box: math::Rect::from_xywh(0.0, 0.0, 0.0, 0.0),
-                    padding_box: math::Rect::from_xywh(0.0, 0.0, 0.0, 0.0),
-                    content_box: math::Rect::from_xywh(0.0, 0.0, 0.0, 0.0),
-                    scale_factor: 1.0,
-                }),
+                cache: LayoutCache::new(),
                 _phantom: PhantomData
             }
         }
@@ -224,212 +236,197 @@ mod props {
             &self.attrs
         }
 
-        fn content_box(&self) -> math::Rect {
-            self.allocated.get().shrink_by(
-                self.scale_factor.get() * (self.attrs.margin + self.attrs.padding + math::SizeRect::from_border(self.attrs.border_size))
-            ).clamp_positive()
+        pub fn remove_parent(&self) -> Option<LayoutCache> {
+            self.cache.0.parent.borrow_mut().take().as_ref().and_then(Weak::upgrade).map(LayoutCache)
         }
 
-        pub fn remove_parent(&self) -> Option<LayoutInvalidator> {
-            self.invalidator.0.parent.borrow_mut().take().as_ref().and_then(Weak::upgrade).map(LayoutInvalidator)
-        }
-
-        pub fn set_parent(&self, parent: &LayoutInvalidator) {
-            let old_parent = self.invalidator.0.parent.borrow_mut().replace(Rc::downgrade(&parent.0));
+        pub fn set_parent(&self, parent: &LayoutCache) {
+            let old_parent = self.cache.0.parent.borrow_mut().replace(Rc::downgrade(&parent.0));
             assert!(old_parent.is_none());
         }
 
-        pub(super) fn set_allocated(&self, allocated: math::Rect) {
-            if allocated != self.allocated.get() {
-                self.allocated.set(allocated);
-                self.invalidator.set_layout_dirty_untracked();
-            }
-        }
-
-        pub(super) fn set_scale_factor(&self, scale_factor: f32) {
-            if scale_factor != self.scale_factor.get() {
-                self.scale_factor.set(scale_factor);
-                self.invalidator.set_layout_dirty_untracked();
-            }
-        }
-
         pub fn invalidate(&mut self) {
-            self.invalidator.invalidate();
+            self.cache.invalidate();
         }
 
-        fn calculate_intrinsic_size(&self, children: &[Element<A>]) -> ContentInfo {
-            let main_axis = self.attrs.main_axis;
-            let cross_axis = main_axis.cross();
-
-            let (known_width, known_height) = (
-                self.attrs.width.as_definite().map(|width| width * self.scale_factor.get()),
-                self.attrs.height.as_definite().map(|height| height * self.scale_factor.get())
-            );
-
-            let mut total_main_size: f32 = 0.0;
-            let mut max_cross_size: f32 = 0.0;
-            let mut total_expand_factor: f32 = 0.0;
-            let mut total_expand_size: f32 = 0.0;
-            for child in children {
-                let child_size = child.0.intrinsic_size();
-
-                total_main_size += child_size.total_size.axis(main_axis);
-                max_cross_size = max_cross_size.max(child_size.total_size.axis(cross_axis));
-
-                let child_sizing = match main_axis {
-                    Axis::Horizontal => child.props().attrs.width,
-                    Axis::Vertical => child.props().attrs.height
-                };
-                match child_sizing {
-                    Sizing::Expand => {
-                        total_expand_factor += 1.0;
-                        total_expand_size += child_size.total_size.axis(main_axis);
-                    },
-                    Sizing::Fit => (),
-                    Sizing::Fixed(_) => ()
-                }
-            }
-
-            let extra_size = self.scale_factor.get() * (math::Size::from_border(self.attrs.border_size) + self.attrs.padding.sum_axes() + self.attrs.margin.sum_axes()).clamp_positive();
-            let initial_content_size = math::Size::from_axes(main_axis, total_main_size, max_cross_size);
-            let content_size = math::Size::new(
-                known_width.unwrap_or(initial_content_size.horizontal),
-                known_height.unwrap_or(initial_content_size.vertical),
-            ).clamp_positive();
-            let total_size = (content_size + extra_size).clamp_positive();
-
-            ContentInfo {
-                total_size,
-                content_size,
-                total_expand_factor,
-                total_expand_size
-            }
-        }
-
-        pub fn get_intrinsic_size_with_children(&self, children: &[Element<A>]) -> ContentInfo {
-            if self.invalidator.is_size_dirty() {
-                let new_size = self.calculate_intrinsic_size(children);
-                self.cached_intrinsic_size.replace(new_size);
-                self.invalidator.reset_size();
-                new_size
+        pub(super) fn get_final_layout(&self) -> Result<Layout, Layout> {
+            let cache = &self.cache.0.cached_final;
+            let margin_box = cache.cached.get().margin_box;
+            let border_box = margin_box.shrink_by(self.attrs.margin + 0.5 * math::SizeRect::from_border(self.attrs.border_size));
+            let padding_box = margin_box.shrink_by(self.attrs.margin + math::SizeRect::from_border(self.attrs.border_size));
+            let content_box = margin_box.shrink_by(self.attrs.margin + self.attrs.padding + math::SizeRect::from_border(self.attrs.border_size));
+            let scale_factor = cache.with_input.get().scale_factor();
+            let layout = Layout { margin_box, border_box, padding_box, content_box, scale_factor };
+            if cache.is_valid.get() {
+                Ok(layout)
             } else {
-                self.cached_intrinsic_size.get()
+                Err(layout)
             }
         }
 
-        pub fn get_cached_layout(&self) -> Layout {
-            self.cached_layout.get()
-        }
+        pub fn compute_layout_leaf(&self, input: LayoutInput, measure: impl FnOnce(math::Size, f32) -> math::Size) -> ComputedLayout {
+            self.cache.get_or_update(input, |input| {
+                let scale_factor = input.scale_factor();
+                let spacing = scale_factor * (self.attrs.margin + self.attrs.padding + math::SizeRect::from_border(self.attrs.border_size));
+                let content_box = input.available() - spacing.sum_axes();
 
-        pub fn update_layout_leaf(&self) -> (Layout, bool) {
-            if self.invalidator.is_layout_dirty() {
-                let layout = Layout {
-                    margin_box: self.allocated.get(),
-                    border_box: self.allocated.get().shrink_by(self.attrs.margin + math::SizeRect::from_border(self.attrs.border_size / 2.0)).clamp_positive(),
-                    padding_box: self.allocated.get().shrink_by(self.attrs.margin + math::SizeRect::from_border(self.attrs.border_size)).clamp_positive(),
-                    content_box: self.allocated.get().shrink_by(self.attrs.margin + self.attrs.padding + math::SizeRect::from_border(self.attrs.border_size)).clamp_positive(),
-                    scale_factor: self.scale_factor.get()
-                };
-                self.cached_layout.set(layout);
-                self.invalidator.reset_layout_dirty();
-                (self.cached_layout.get(), true)
-            } else {
-                (self.cached_layout.get(), false)
-            }
-        }
-
-        pub fn update_layout_with_children(&self, children: &[Element<A>]) -> Layout {
-            if self.invalidator.is_layout_dirty() {
-                for child in children {
-                    child.0.layout_cache().set_scale_factor(self.scale_factor.get());
+                let measured_size = measure(content_box, scale_factor);
+                match input {
+                    LayoutInput::ComputeSize { .. } => {
+                        ComputedLayout {
+                            margin_box: math::Rect::from_topleft_size((0.0, 0.0).into(), measured_size)
+                        }
+                    }
+                    LayoutInput::FinalLayout { allocated, .. } => {
+                        let top_left = allocated.top_left();
+                        ComputedLayout {
+                            margin_box: math::Rect::from_topleft_size(top_left, measured_size)
+                        }
+                    }
                 }
+            })
+        }
 
+        pub fn compute_layout_with_children(&mut self, input: LayoutInput, children: &mut [Element<A>]) -> ComputedLayout {
+            self.cache.get_or_update(input, |input| {
+                let scale_factor = input.scale_factor();
+                let spacing = scale_factor * (self.attrs.margin + self.attrs.padding + math::SizeRect::from_border(self.attrs.border_size));
                 let main_axis = self.attrs.main_axis;
                 let cross_axis = main_axis.cross();
-
-                let intrinsic_size = self.get_intrinsic_size_with_children(children);
-                let content_size = intrinsic_size.content_size;
-                let mut content_box = self.content_box();
-                let mut remaining = (content_box.size().axis(main_axis) - content_size.axis(main_axis)).max(0.0);
-                let mut per_expand_space = 0.0;
-                if intrinsic_size.total_expand_factor == 0.0 {
-                    let trim_amounts = match self.attrs.main_justify {
-                        Justify::Min => (0.0, remaining),
-                        Justify::Max => (remaining, 0.0),
-                        Justify::Center => (remaining / 2.0, remaining / 2.0)
-                    };
-                    content_box = content_box.shrink_by(math::SizeRect::from_axis(main_axis, trim_amounts.0, trim_amounts.1));
-                    remaining = 0.0;
-                } else {
-                    per_expand_space = (remaining + intrinsic_size.total_expand_size) / intrinsic_size.total_expand_factor;
-                }
-                let mut curr = match (main_axis, self.attrs.main_direction) {
-                    (Axis::Vertical, Direction::Positive) => content_box.top(),
-                    (Axis::Vertical, Direction::Negative) => content_box.bottom(),
-                    (Axis::Horizontal, Direction::Positive) => content_box.left(),
-                    (Axis::Horizontal, Direction::Negative) => content_box.right()
+                let (main_sizing, cross_sizing) = {
+                    let attrs = &self.attrs;
+                    match main_axis {
+                        Axis::Vertical => (attrs.height, attrs.width),
+                        Axis::Horizontal => (attrs.width, attrs.height)
+                    }
                 };
+                let main_justify = self.attrs.main_justify;
+                let main_direction = self.attrs.main_direction;
+                let cross_justify = self.attrs.cross_justify;
 
-                for child in children {
-                    // todo make a helper and optimize using Rc::ptr_eq
-                    child.props().remove_parent();
-                    child.props().set_parent(&self.invalidator);
+                let available_content_size = input.available() - spacing.sum_axes();
+                let main_available = available_content_size.axis(main_axis);
+                let cross_available = available_content_size.axis(cross_axis);
 
-                    let child_size = child.0.intrinsic_size();
-                    let (child_main_sizing, child_cross_sizing) = match main_axis {
-                        Axis::Horizontal => (child.props().attrs.width, child.props().attrs.height),
-                        Axis::Vertical => (child.props().attrs.height, child.props().attrs.width)
-                    };
-                    let main_axis_amount = match child_main_sizing {
-                        Sizing::Expand => (per_expand_space * 1.0).max(child_size.total_size.axis(main_axis)),
-                        Sizing::Fit => child_size.total_size.axis(main_axis),
-                        Sizing::Fixed(_) => child_size.total_size.axis(main_axis),
-                    };
-                    let cross_axis_amount = content_box.width().min(match child_cross_sizing {
-                        Sizing::Expand => f32::INFINITY,
-                        Sizing::Fit => child_size.total_size.axis(cross_axis),
-                        Sizing::Fixed(_) => child_size.total_size.axis(cross_axis),
-                    });
-
-                    // todo use cross justify
-                    let allocated;
-                    match (main_axis, self.attrs.main_direction) {
-                        (Axis::Vertical, Direction::Positive) => {
-                            allocated = math::Rect::from_lrtb(content_box.left(), content_box.left() + cross_axis_amount, curr, curr + main_axis_amount);
-                            curr += main_axis_amount;
-                        },
-                        (Axis::Vertical, Direction::Negative) => {
-                            allocated = math::Rect::from_lrtb(content_box.left(), content_box.left() + cross_axis_amount, curr - main_axis_amount, curr);
-                            curr -= main_axis_amount;
-                        },
-                        (Axis::Horizontal, Direction::Positive) => {
-                            allocated = math::Rect::from_lrtb(curr, curr + main_axis_amount, content_box.top(), content_box.top() + cross_axis_amount);
-                            curr += main_axis_amount;
-                        },
-                        (Axis::Horizontal, Direction::Negative) => {
-                            allocated = math::Rect::from_lrtb(curr - main_axis_amount, curr, content_box.top(), content_box.top() + cross_axis_amount);
-                            curr -= main_axis_amount;
+                let mut child_content_sizes = Vec::new();
+                let mut total_main_space: f32 = 0.0;
+                let mut max_cross_space: f32 = 0.0;
+                let mut total_expand_factor: f32 = 0.0;
+                let mut max_space_per_expand: f32 = 0.0;
+                for child in children.iter_mut() {
+                    let (child_main_sizing, child_cross_sizing) = {
+                        let attrs = &child.0.layout_cache().attrs;
+                        match main_axis {
+                            Axis::Vertical => (attrs.height, attrs.width),
+                            Axis::Horizontal => (attrs.width, attrs.height)
                         }
                     };
-                    child.0.layout_cache().set_allocated(allocated);
+
+                    let child_computed = child.compute_layout(LayoutInput::ComputeSize {
+                        available: math::Size::from_axes(main_axis, f32::INFINITY, cross_available),
+                        scale_factor: input.scale_factor()
+                    });
+
+                    let child_main_space = child_main_sizing.as_definite(scale_factor).unwrap_or(child_computed.margin_box.size().axis(main_axis));
+                    let child_cross_space = child_cross_sizing.as_definite(scale_factor).unwrap_or(child_computed.margin_box.size().axis(cross_axis));
+
+                    if let Sizing::Expand = child_main_sizing {
+                        total_expand_factor += 1.0;
+                        max_space_per_expand = max_space_per_expand.max(child_main_space / 1.0);
+                    } else {
+                        total_main_space += child_main_space;
+                    }
+
+                    max_cross_space = max_cross_space.max(child_cross_space);
+
+                    child_content_sizes.push((child_main_sizing, child_cross_sizing, math::Size::from_axes(main_axis, child_main_space, child_cross_space)));
+                }
+                total_main_space += total_expand_factor * max_space_per_expand;
+
+                let main_content_size = main_sizing.as_definite(scale_factor).unwrap_or(total_main_space);
+                let cross_content_size = cross_sizing.as_definite(scale_factor).unwrap_or(max_cross_space);
+                let content_size = math::Size::from_axes(main_axis, main_content_size, cross_content_size);
+
+                let allocated = match input {
+                    LayoutInput::ComputeSize { .. } =>
+                        return ComputedLayout {
+                            margin_box: math::Rect::from_topleft_size((0.0, 0.0).into(), content_size + spacing.sum_axes())
+                        },
+                    LayoutInput::FinalLayout { allocated, .. } => allocated
+                };
+                assert_ne!(main_available, f32::INFINITY);
+
+                let (allocated, space_per_expand) = {
+                    let remaining = allocated.shrink_by(spacing).size().axis(main_axis) - content_size.axis(main_axis);
+                    if remaining > 0.0 {
+                        if total_expand_factor == 0.0 {
+                            let (min_shrink, max_shrink) = match main_justify {
+                                Justify::Min => (0.0, remaining),
+                                Justify::Max => (remaining, 0.0),
+                                Justify::Center => (remaining / 2.0, remaining / 2.0)
+                            };
+                            (allocated.shrink_by(math::SizeRect::from_axis(main_axis, min_shrink, max_shrink)), 0.0)
+                        } else {
+                            (allocated, remaining / total_expand_factor)
+                        }
+                    } else {
+                        (allocated, 0.0)
+                    }
+                };
+                let content_box = allocated.shrink_by(spacing);
+
+                let mut curr = match (main_axis, main_direction) {
+                    (Axis::Horizontal, Direction::Positive) => content_box.left(),
+                    (Axis::Horizontal, Direction::Negative) => content_box.right(),
+                    (Axis::Vertical, Direction::Positive) => content_box.top(),
+                    (Axis::Vertical, Direction::Negative) => content_box.bottom()
+                };
+
+                for ((child_main_sizing, child_cross_sizing, child_content_size), child) in child_content_sizes.into_iter().zip(children) {
+                    let main_amount = match child_main_sizing {
+                        Sizing::Expand => space_per_expand * 1.0,
+                        Sizing::Fixed(_) => child_content_size.axis(main_axis),
+                        Sizing::Fit => child_content_size.axis(main_axis)
+                    };
+                    let cross_amount = match child_cross_sizing {
+                        Sizing::Expand => content_box.size().axis(cross_axis),
+                        Sizing::Fixed(_) => child_content_size.axis(cross_axis),
+                        Sizing::Fit => child_content_size.axis(cross_axis)
+                    };
+                    let cross_start = match cross_axis {
+                        Axis::Horizontal => content_box.left(),
+                        Axis::Vertical => content_box.top()
+                    } + match cross_justify {
+                        Justify::Min => 0.0,
+                        Justify::Max => content_size.axis(cross_axis) - cross_amount,
+                        Justify::Center => (content_size.axis(cross_axis) - cross_amount) / 2.0,
+                    };
+
+                    let child_allocated = match (main_axis, main_direction) {
+                        (Axis::Horizontal, Direction::Positive) => {
+                            math::Rect::from_lrtb(curr, curr + main_amount, cross_start, cross_start + cross_amount)
+                        }
+                        (Axis::Horizontal, Direction::Negative) => {
+                            math::Rect::from_lrtb(curr - main_amount, curr, cross_start, cross_start + cross_amount)
+                        }
+                        (Axis::Vertical, Direction::Positive) => {
+                            math::Rect::from_lrtb(cross_start, cross_start + cross_amount, curr, curr + main_amount)
+                        }
+                        (Axis::Vertical, Direction::Negative) => {
+                            math::Rect::from_lrtb(cross_start, cross_start + cross_amount,curr - main_amount, curr)
+                        }
+                    };
+                    match main_direction {
+                        Direction::Positive => curr += main_amount,
+                        Direction::Negative => curr -= main_amount
+                    };
+                    child.compute_layout(LayoutInput::FinalLayout { allocated: child_allocated, scale_factor });
                 }
 
-                self.cached_layout.set(Layout {
-                    margin_box: self.allocated.get(),
-                    border_box: self.allocated.get().shrink_by(
-                        self.scale_factor.get() * (self.attrs.margin + math::SizeRect::from_border(self.attrs.border_size / 2.0))
-                    ).clamp_positive(),
-                    padding_box: self.allocated.get().shrink_by(
-                        self.scale_factor.get() * (self.attrs.margin + math::SizeRect::from_border(self.attrs.border_size))
-                    ).clamp_positive(),
-                    content_box: self.allocated.get().shrink_by(
-                        self.scale_factor.get() * (self.attrs.margin + self.attrs.padding + math::SizeRect::from_border(self.attrs.border_size))
-                    ).clamp_positive(),
-                    scale_factor: self.scale_factor.get(),
-                });
-                self.invalidator.reset_layout_dirty();
-            }
-            self.cached_layout.get()
+                ComputedLayout {
+                    margin_box: allocated
+                }
+            })
         }
 
         pub fn set_width(&mut self, width: Sizing) {

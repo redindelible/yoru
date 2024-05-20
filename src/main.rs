@@ -11,8 +11,8 @@ mod style;
 mod math;
 
 use tiny_skia::{PixmapMut};
-use element::{Element, LayoutCache, ContentInfo};
-use crate::element::{Layout, Root};
+use element::{Element, BoxLayout, ContentInfo};
+use crate::element::{ComputedLayout, Layout, LayoutInput, Root};
 use crate::math::Axis;
 use crate::style::{Color, Direction, Justify, LayoutStyle, Sizing};
 
@@ -21,13 +21,11 @@ pub struct RenderContext<'a> {
 }
 
 pub trait Widget<A> {
-    fn layout_cache(&self) -> &LayoutCache<A>;
-    fn layout_cache_mut(&mut self) -> &mut LayoutCache<A>;
-    fn intrinsic_size(&self) -> ContentInfo;
+    fn layout_cache(&self) -> &BoxLayout<A>;
+    fn layout_cache_mut(&mut self) -> &mut BoxLayout<A>;
+    fn compute_layout(&mut self, input: LayoutInput) -> ComputedLayout;
 
     fn update_model(&mut self, model: &mut A);
-
-    fn update_layout(&mut self);
 
     fn draw(&mut self, context: &mut RenderContext, layout: &Layout);
 }
@@ -65,7 +63,7 @@ thread_local! {
 
 
 struct Label<A> {
-    layout_cache: LayoutCache<A>,
+    layout_cache: BoxLayout<A>,
 
     font_size: f32,
 
@@ -89,9 +87,9 @@ impl<A> Label<A> {
         });
 
         Label {
-            layout_cache: LayoutCache::new(LayoutStyle {
+            layout_cache: BoxLayout::new(LayoutStyle {
                 border_size: 0.0,
-                padding: 2.0.into(),
+                padding: 0.0.into(),
                 margin: 0.0.into(),
                 width: Sizing::Fit,
                 height: Sizing::Fit,
@@ -117,18 +115,12 @@ impl<A> Label<A> {
 }
 
 impl<A> Widget<A> for Label<A> {
-    fn layout_cache(&self) -> &LayoutCache<A> {
+    fn layout_cache(&self) -> &BoxLayout<A> {
         &self.layout_cache
     }
 
-    fn layout_cache_mut(&mut self) -> &mut LayoutCache<A> {
+    fn layout_cache_mut(&mut self) -> &mut BoxLayout<A> {
         &mut self.layout_cache
-    }
-
-    fn intrinsic_size(&self) -> ContentInfo {
-        let max_width = self.sizing_buffer.layout_runs().map(|run| run.line_w).max_by(f32::total_cmp).unwrap_or(0.0);
-        let total_height = self.sizing_buffer.lines.len() as f32 * self.sizing_buffer.metrics().line_height;
-        ContentInfo::new_for_leaf(self.layout_cache().attrs(), math::Size::new(max_width, total_height))
     }
 
     fn update_model(&mut self, model: &mut A) {
@@ -145,28 +137,72 @@ impl<A> Widget<A> for Label<A> {
         }
     }
 
-    fn update_layout(&mut self) {
-        let (layout, was_updated) = self.layout_cache().update_layout_leaf();
-        if was_updated {
+    fn compute_layout(&mut self, input: LayoutInput) -> ComputedLayout {
+        self.layout_cache.compute_layout_leaf(input, |available_size, scale_factor| {
             FONTS.with_borrow_mut(|fonts| {
-                self.buffer.set_metrics_and_size(fonts, cosmic_text::Metrics {
-                    font_size: self.font_size * layout.scale_factor,
-                    line_height: self.font_size * layout.scale_factor,
-                }, layout.content_box.width(), layout.content_box.height());
-            });
-        }
+                self.sizing_buffer.set_metrics_and_size(
+                    fonts,
+                    cosmic_text::Metrics::new(self.font_size * scale_factor, self.font_size * scale_factor),
+                    available_size.width(), available_size.height()
+                );
+                let max_width = self.sizing_buffer.layout_runs().map(|run| run.line_w).max_by(f32::total_cmp).unwrap_or(0.0);
+                let total_height = self.sizing_buffer.lines.len() as f32 * self.sizing_buffer.metrics().line_height;
+                math::Size::new(max_width, total_height)
+            })
+        })
     }
 
     fn draw(&mut self, context: &mut RenderContext, layout: &Layout) {
         FONTS.with_borrow_mut(|fonts| {
+            self.buffer.set_metrics_and_size(
+                fonts,
+                cosmic_text::Metrics::new(self.font_size * layout.scale_factor, self.font_size * layout.scale_factor),
+                layout.content_box.width(), layout.content_box.height()
+            );
+
             SWASH_CACHE.with_borrow_mut(|swash_cache| {
                 let mut paint = tiny_skia::Paint::default();
+                paint.set_color(Color::BLACK.into());
                 let content_top_left = layout.content_box.top_left();
-                self.buffer.draw(fonts, swash_cache, Color::BLACK.into(), |x, y, w, h, color| {
-                    paint.set_color(tiny_skia::Color::from_rgba8(color.r(), color.g(), color.b(), color.a()));
-                    // context.canvas.fill_rect(tiny_skia::Rect::from_xywh(x as f32 + content_top_left.x, y as f32 + content_top_left.y, w as f32, h as f32).unwrap(), &paint, context.transform, None);
-                    context.canvas.fill_rect(tiny_skia::Rect::from_xywh(x as f32 + content_top_left.x, y as f32 + content_top_left.y, w as f32, h as f32).unwrap(), &paint, tiny_skia::Transform::identity(), None);
-                });
+
+                for run in self.buffer.layout_runs() {
+                    for glyph in run.glyphs {
+                        let physical_glyph = glyph.physical((content_top_left.x, content_top_left.y), 1.0);
+
+                        // todo first try get_image
+                        // todo add with pixel fallback
+                        if let Some(commands) = swash_cache.get_outline_commands(fonts, physical_glyph.cache_key) {
+                            use cosmic_text::Command;
+
+                            let x_off = content_top_left.x + glyph.x + glyph.x_offset;
+                            let y_off = content_top_left.y + glyph.y_offset + run.line_y;
+
+                            let mut path_builder = tiny_skia::PathBuilder::new();
+                            for command in commands {
+                                match command {
+                                    Command::MoveTo(point) =>
+                                        path_builder.move_to(point.x + x_off, -point.y + y_off),
+                                    Command::LineTo(point) =>
+                                        path_builder.line_to(point.x + x_off, -point.y + y_off),
+                                    Command::CurveTo(p1, p2, p3) =>
+                                        path_builder.cubic_to(p1.x + x_off, -p1.y + y_off, p2.x + x_off, -p2.y + y_off, p3.x + x_off, -p3.y + y_off),
+                                    Command::QuadTo(p1, p2) =>
+                                        path_builder.quad_to(p1.x + x_off, -p1.y + y_off, p2.x + x_off, -p2.y + y_off),
+                                    Command::Close => path_builder.close()
+                                }
+                            }
+                            if let Some(path) = path_builder.finish() {
+                                context.canvas.fill_path(
+                                    &path,
+                                    &paint,
+                                    tiny_skia::FillRule::EvenOdd,
+                                    tiny_skia::Transform::identity(),
+                                    None
+                                )
+                            }
+                        }
+                    }
+                }
             });
         });
     }
@@ -181,7 +217,7 @@ impl<A: 'static> From<Label<A>> for Element<A> {
 
 // #[derive(Debug)]
 struct Div<A> {
-    layout_cache: LayoutCache<A>,
+    layout_cache: BoxLayout<A>,
     children: Vec<Element<A>>,
 
     border_color: Option<Color>,
@@ -191,7 +227,7 @@ struct Div<A> {
 impl<A> Div<A> {
     fn new() -> Div<A> {
         Div {
-            layout_cache: LayoutCache::new(LayoutStyle {
+            layout_cache: BoxLayout::new(LayoutStyle {
                 border_size: 2.0,
                 padding: 2.0.into(),
                 margin: 1.0.into(),
@@ -226,12 +262,8 @@ impl<A: 'static> From<Div<A>> for Element<A> {
 }
 
 impl<A> Widget<A> for Div<A> {
-    fn layout_cache(&self) -> &LayoutCache<A> { &self.layout_cache }
-    fn layout_cache_mut(&mut self) -> &mut LayoutCache<A> { &mut self.layout_cache }
-
-    fn intrinsic_size(&self) -> ContentInfo {
-        self.layout_cache.get_intrinsic_size_with_children(&self.children)
-    }
+    fn layout_cache(&self) -> &BoxLayout<A> { &self.layout_cache }
+    fn layout_cache_mut(&mut self) -> &mut BoxLayout<A> { &mut self.layout_cache }
 
     fn update_model(&mut self, model: &mut A) {
         // todo the caching needs to be tracked somehow
@@ -241,11 +273,8 @@ impl<A> Widget<A> for Div<A> {
         }
     }
 
-    fn update_layout(&mut self) {
-        self.layout_cache.update_layout_with_children(&self.children);
-        for child in &mut self.children {
-            child.update_layout();
-        }
+    fn compute_layout(&mut self, input: LayoutInput) -> ComputedLayout {
+        self.layout_cache.compute_layout_with_children(input, &mut self.children)
     }
 
     fn draw(&mut self, context: &mut RenderContext, layout: &Layout) {
@@ -429,16 +458,12 @@ impl<A: 'static, S, O> From<Select<A, S, O>> for Element<A> where O: IndexMut<S,
 }
 
 impl<A, S, O> Widget<A> for Select<A, S, O> where O: IndexMut<S, Output=Element<A>> + 'static, S: Copy + 'static {
-    fn layout_cache(&self) -> &LayoutCache<A> {
+    fn layout_cache(&self) -> &BoxLayout<A> {
         self.element().props()
     }
 
-    fn layout_cache_mut(&mut self) -> &mut LayoutCache<A> {
+    fn layout_cache_mut(&mut self) -> &mut BoxLayout<A> {
         self.element_mut().props_mut()
-    }
-
-    fn intrinsic_size(&self) -> ContentInfo {
-        self.element().intrinsic_size()
     }
 
     fn update_model(&mut self, model: &mut A) {
@@ -453,8 +478,8 @@ impl<A, S, O> Widget<A> for Select<A, S, O> where O: IndexMut<S, Output=Element<
         }
     }
 
-    fn update_layout(&mut self) {
-        self.element_mut().update_layout()
+    fn compute_layout(&mut self, input: LayoutInput) -> ComputedLayout {
+        self.element_mut().compute_layout(input)
     }
 
     fn draw(&mut self, context: &mut RenderContext, _layout: &Layout) {
@@ -537,6 +562,8 @@ Donec volutpat sapien id justo rhoncus, id maximus magna blandit. Vestibulum ac 
 Phasellus sit amet scelerisque nulla. Sed ante metus, rhoncus et elit non, bibendum lacinia dui. Integer non efficitur nibh, in faucibus leo. Aenean quis scelerisque purus. Etiam scelerisque, nunc luctus rutrum vehicula, orci magna facilisis nibh, eu vulputate neque ipsum eget quam. Phasellus sit amet augue purus. Morbi ut ex quis neque ornare scelerisque.
 
 Aenean porta iaculis eleifend. Nam pulvinar quis sapien ut congue. Suspendisse ut malesuada mauris, faucibus sollicitudin magna. Fusce ac dui eu elit consectetur ultrices. Curabitur consectetur elementum imperdiet. Ut maximus neque elit, vitae hendrerit purus laoreet ut. Sed hendrerit pellentesque rutrum. Etiam iaculis sem nec lorem placerat, rhoncus scelerisque lectus scelerisque. Aliquam suscipit vel nunc sed efficitur. Praesent tempor erat velit, sed ornare tellus finibus nec. Nulla eget metus erat. Mauris non porta lectus, nec vestibulum arcu. Nam sem ante, pretium ut ex vel, venenatis pretium ligula.";
+
+// const EXAMPLE_TEXT: &'static str = "Hullo\nBalls";
 
 
 fn assert_send<T: Sync>(_: &T) {
