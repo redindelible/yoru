@@ -162,10 +162,10 @@ impl<A> BoxLayout<A> {
     pub(super) fn get_final_layout(&self) -> Result<Layout, Layout> {
         let cache = &self.cache.0.cached_final;
         let margin_box = cache.cached.get().margin_box;
-        let border_box = margin_box.shrink_by(self.attrs.margin + 0.5 * math::SizeRect::from_border(self.attrs.border_size));
-        let padding_box = margin_box.shrink_by(self.attrs.margin + math::SizeRect::from_border(self.attrs.border_size));
-        let content_box = margin_box.shrink_by(self.attrs.margin + self.attrs.padding + math::SizeRect::from_border(self.attrs.border_size));
         let scale_factor = cache.with_input.get().scale_factor();
+        let border_box = margin_box.shrink_by(scale_factor * (self.attrs.margin + 0.5 * math::SizeRect::from_border(self.attrs.border_size)));
+        let padding_box = margin_box.shrink_by(scale_factor * (self.attrs.margin + math::SizeRect::from_border(self.attrs.border_size)));
+        let content_box = margin_box.shrink_by(scale_factor * (self.attrs.margin + self.attrs.padding + math::SizeRect::from_border(self.attrs.border_size)));
         let layout = Layout { margin_box, border_box, padding_box, content_box, scale_factor };
         if cache.is_valid.get() {
             Ok(layout)
@@ -239,8 +239,8 @@ impl<A> BoxLayout<A> {
                     scale_factor: input.scale_factor()
                 });
 
-                let child_main_space = child_main_sizing.as_definite(scale_factor).unwrap_or(child_computed.margin_box.size().axis(main_axis));
-                let child_cross_space = child_cross_sizing.as_definite(scale_factor).unwrap_or(child_computed.margin_box.size().axis(cross_axis));
+                let child_main_space = child_computed.margin_box.size().axis(main_axis);
+                let child_cross_space = child_computed.margin_box.size().axis(cross_axis);
 
                 if let Sizing::Expand = child_main_sizing {
                     total_expand_factor += 1.0;
@@ -251,7 +251,11 @@ impl<A> BoxLayout<A> {
 
                 max_cross_space = max_cross_space.max(child_cross_space);
 
-                child_content_sizes.push((child_main_sizing, child_cross_sizing, math::Size::from_axes(main_axis, child_main_space, child_cross_space)));
+                child_content_sizes.push((
+                    child_main_sizing,
+                    child_cross_sizing,
+                    math::Size::from_axes(main_axis, child_main_space, child_cross_space))
+                );
             }
             total_main_space += total_expand_factor * max_space_per_expand;
 
@@ -260,10 +264,11 @@ impl<A> BoxLayout<A> {
             let content_size = math::Size::from_axes(main_axis, main_content_size, cross_content_size);
 
             let allocated = match input {
-                LayoutInput::ComputeSize { .. } =>
+                LayoutInput::ComputeSize { .. } => {
                     return ComputedLayout {
                         margin_box: math::Rect::from_topleft_size((0.0, 0.0).into(), content_size + spacing.sum_axes())
-                    },
+                    }
+                }
                 LayoutInput::FinalLayout { allocated, .. } => allocated
             };
             assert_ne!(main_available, f32::INFINITY);
