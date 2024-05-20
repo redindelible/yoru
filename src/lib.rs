@@ -124,6 +124,21 @@ impl<A> Widget<A> for Label<A> {
         &mut self.layout_cache
     }
 
+    fn compute_layout(&mut self, input: LayoutInput) -> ComputedLayout {
+        self.layout_cache.compute_layout_leaf(input, |available_size, scale_factor| {
+            FONTS.with_borrow_mut(|fonts| {
+                self.sizing_buffer.set_metrics_and_size(
+                    fonts,
+                    cosmic_text::Metrics::new(self.font_size * scale_factor, self.font_size * scale_factor),
+                    available_size.width(), available_size.height()
+                );
+                let max_width = self.sizing_buffer.layout_runs().map(|run| run.line_w).max_by(f32::total_cmp).unwrap_or(0.0);
+                let total_height = self.sizing_buffer.layout_runs().len() as f32 * self.sizing_buffer.metrics().line_height;
+                math::Size::new(max_width, total_height)
+            })
+        })
+    }
+
     fn update_model(&mut self, model: &mut A) {
         if self.changed.is_changed() {
             let (changed, text) = Changed::run_and_track(|| (self.compute)(model));
@@ -136,21 +151,6 @@ impl<A> Widget<A> for Label<A> {
             self.layout_cache.invalidate();
             self.changed = changed;
         }
-    }
-
-    fn compute_layout(&mut self, input: LayoutInput) -> ComputedLayout {
-        self.layout_cache.compute_layout_leaf(input, |available_size, scale_factor| {
-            FONTS.with_borrow_mut(|fonts| {
-                self.sizing_buffer.set_metrics_and_size(
-                    fonts,
-                    cosmic_text::Metrics::new(self.font_size * scale_factor, self.font_size * scale_factor),
-                    available_size.width(), available_size.height()
-                );
-                let max_width = self.sizing_buffer.layout_runs().map(|run| run.line_w).max_by(f32::total_cmp).unwrap_or(0.0);
-                let total_height = self.sizing_buffer.lines.len() as f32 * self.sizing_buffer.metrics().line_height;
-                math::Size::new(max_width, total_height)
-            })
-        })
     }
 
     fn draw(&mut self, context: &mut RenderContext, layout: &Layout) {
@@ -265,16 +265,16 @@ impl<A> Widget<A> for Div<A> {
     fn layout_cache(&self) -> &BoxLayout<A> { &self.layout_cache }
     fn layout_cache_mut(&mut self) -> &mut BoxLayout<A> { &mut self.layout_cache }
 
+    fn compute_layout(&mut self, input: LayoutInput) -> ComputedLayout {
+        self.layout_cache.compute_layout_with_children(input, &mut self.children)
+    }
+
     fn update_model(&mut self, model: &mut A) {
         // todo the caching needs to be tracked somehow
         //   similar to layout, but the current doesn't need to be rerun if a child is out of date
         for child in &mut self.children {
             child.update_model(model);
         }
-    }
-
-    fn compute_layout(&mut self, input: LayoutInput) -> ComputedLayout {
-        self.layout_cache.compute_layout_with_children(input, &mut self.children)
     }
 
     fn draw(&mut self, context: &mut RenderContext, layout: &Layout) {
@@ -472,6 +472,10 @@ impl<A, S, O> Widget<A> for Select<A, S, O> where O: IndexMut<S, Output=Element<
         self.element_mut().props_mut()
     }
 
+    fn compute_layout(&mut self, input: LayoutInput) -> ComputedLayout {
+        self.element_mut().compute_layout(input)
+    }
+
     fn update_model(&mut self, model: &mut A) {
         if self.dirty.is_changed() {
             let (dirty, index) = Changed::run_and_track(|| (self.selector)(model));
@@ -482,10 +486,6 @@ impl<A, S, O> Widget<A> for Select<A, S, O> where O: IndexMut<S, Output=Element<
 
             self.dirty = dirty;
         }
-    }
-
-    fn compute_layout(&mut self, input: LayoutInput) -> ComputedLayout {
-        self.element_mut().compute_layout(input)
     }
 
     fn draw(&mut self, context: &mut RenderContext, _layout: &Layout) {
