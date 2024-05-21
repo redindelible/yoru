@@ -1,9 +1,11 @@
 mod label;
 mod div;
+mod select;
 
 use crate::{BoxLayout, ComputedLayout, Layout, LayoutInput, RenderContext};
 
-pub use div::{Div};
+pub use div::Div;
+pub use select::Select;
 pub use label::Label;
 
 pub trait Widget<A> {

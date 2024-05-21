@@ -66,15 +66,48 @@ impl GlyphCache {
 }
 
 
+pub struct Derived<A, V> {
+    value: V,
+    changed: Changed,
+    compute: Box<dyn Fn(&mut A) -> V>
+}
+
+impl<A, V> Derived<A, V> {
+    pub fn new_with_initial(initial: V, compute: impl (Fn(&mut A) -> V) + 'static) -> Derived<A, V> {
+        Derived {
+            value: initial,
+            changed: Changed::untracked(true),
+            compute: Box::new(compute)
+        }
+    }
+}
+
+impl<A, V> Derived<A, V> where V: Default {
+    pub fn new(compute: impl (Fn(&mut A) -> V) + 'static) -> Derived<A, V> {
+        Derived {
+            value: V::default(),
+            changed: Changed::untracked(true),
+            compute: Box::new(compute)
+        }
+    }
+
+    pub fn maybe_update(&mut self, model: &mut A) -> Option<&V> {
+        if self.changed.is_changed() {
+            self.value = (self.compute)(model);
+            Some(&self.value)
+        } else {
+            None
+        }
+    }
+}
+
 
 pub struct Label<A> {
     layout_cache: BoxLayout<A>,
 
     font_size: f32,
 
-    changed: Changed,
-    text: String,
-    compute: Box<dyn Fn(&mut A) -> String>,
+    text: Derived<A, String>,
 
     sizing_buffer: cosmic_text::Buffer,
     buffer: cosmic_text::Buffer
@@ -107,9 +140,7 @@ impl<A> Label<A> {
 
             font_size,
 
-            changed: Changed::untracked(true),
-            text: String::new(),
-            compute: Box::new(compute),
+            text: Derived::new(compute),
 
             sizing_buffer,
             buffer: FONTS.with_borrow_mut(|fonts| {
@@ -144,16 +175,13 @@ impl<A> Widget<A> for Label<A> {
     }
 
     fn update_model(&mut self, model: &mut A) {
-        if self.changed.is_changed() {
-            let (changed, text) = Changed::run_and_track(|| (self.compute)(model));
-            self.text = text;
+        if let Some(new_value) = self.text.maybe_update(model) {
             FONTS.with_borrow_mut(|fonts| {
-                self.buffer.set_text(fonts, &self.text, cosmic_text::Attrs::new(), cosmic_text::Shaping::Advanced);
-                self.sizing_buffer.set_text(fonts, &self.text, cosmic_text::Attrs::new(), cosmic_text::Shaping::Advanced);
+                self.buffer.set_text(fonts, new_value, cosmic_text::Attrs::new(), cosmic_text::Shaping::Advanced);
+                self.sizing_buffer.set_text(fonts, new_value, cosmic_text::Attrs::new(), cosmic_text::Shaping::Advanced);
             });
 
             self.layout_cache.invalidate();
-            self.changed = changed;
         }
     }
 
