@@ -1,7 +1,8 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
-use crate::{BoxLayout, Changed, Color, ComputedLayout, Direction, Element, Justify, Layout, LayoutInput, LayoutStyle, math, RenderContext, Sizing};
+use crate::{BoxLayout, Color, ComputedLayout, Direction, Element, Justify, Layout, LayoutInput, LayoutStyle, math, RenderContext, Sizing};
 use crate::math::Axis;
+use crate::tracking::Derived;
 use crate::widgets::Widget;
 
 thread_local! {
@@ -61,42 +62,6 @@ impl GlyphCache {
                 offset: (0, 0),
                 image: None
             }
-        }
-    }
-}
-
-
-pub struct Derived<A, V> {
-    value: V,
-    changed: Changed,
-    compute: Box<dyn Fn(&mut A) -> V>
-}
-
-impl<A, V> Derived<A, V> {
-    pub fn new_with_initial(initial: V, compute: impl (Fn(&mut A) -> V) + 'static) -> Derived<A, V> {
-        Derived {
-            value: initial,
-            changed: Changed::untracked(true),
-            compute: Box::new(compute)
-        }
-    }
-}
-
-impl<A, V> Derived<A, V> where V: Default {
-    pub fn new(compute: impl (Fn(&mut A) -> V) + 'static) -> Derived<A, V> {
-        Derived {
-            value: V::default(),
-            changed: Changed::untracked(true),
-            compute: Box::new(compute)
-        }
-    }
-
-    pub fn maybe_update(&mut self, model: &mut A) -> Option<&V> {
-        if self.changed.is_changed() {
-            self.value = (self.compute)(model);
-            Some(&self.value)
-        } else {
-            None
         }
     }
 }

@@ -1,6 +1,7 @@
 use std::cell::Cell;
 use std::ops::IndexMut;
-use crate::{BoxLayout, Changed, ComputedLayout, Element, Layout, LayoutInput, RenderContext, Widget};
+use crate::{BoxLayout, ComputedLayout, Element, Layout, LayoutInput, RenderContext, Widget};
+use crate::tracking::Changed;
 
 pub struct Select<A, S, O> {
     dirty: Changed,
