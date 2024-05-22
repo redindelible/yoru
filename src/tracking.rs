@@ -13,6 +13,9 @@ impl TrackedInner {
 
         let mut curr = self.parent.borrow().as_ref().and_then(Weak::upgrade);
         while let Some(tracked) = curr {
+            // todo maybe switch to multiple parents + flood fill approach
+            //   if we maintain the invariant that invalid elements are only dependents of invalid elements
+            //   then we can use the 'dirty' as the 'visited' flag for flood fill
             tracked.dirty.set(true);
 
             curr = tracked.parent.borrow().as_ref().and_then(Weak::upgrade);
@@ -69,6 +72,17 @@ impl<T> Signal<T> {
 
 pub struct OnChangeToken(Weak<TrackedInner>);
 
+impl OnChangeToken {
+    pub fn notify_read(&self) {
+        if let Some(tracker) = TRACKER.take() {
+            if let Some(this) = self.0.upgrade() {
+                this.parent.borrow_mut().replace(Rc::downgrade(&tracker));
+            }
+            TRACKER.set(Some(tracker));
+        }
+    }
+}
+
 pub struct Changed(Rc<TrackedInner>);
 
 impl Changed {
@@ -118,6 +132,44 @@ impl Changed {
 }
 
 
+pub struct Computed<V> {
+    value: V,
+    changed: Changed
+}
+
+impl<V> Computed<V> {
+    pub fn new_with_initial(initial: V) -> Computed<V> {
+        Computed {
+            value: initial,
+            changed: Changed::untracked(true)
+        }
+    }
+
+    pub fn token(&self) -> OnChangeToken {
+        self.changed.token()
+    }
+
+    pub fn get_untracked(&self) -> &V {
+        &self.value
+    }
+
+    pub fn maybe_update(&mut self, f: impl FnOnce(&V) -> V) -> Option<(V, &V)> {
+        if self.changed.is_changed() {
+            let (changed, value) = Changed::run_and_track(|| f(&self.value));
+            let old_value = std::mem::replace(&mut self.value, value);
+            self.changed = changed;
+            Some((old_value, &self.value))
+        } else {
+            None
+        }
+    }
+}
+
+impl<V: Default> Computed<V> {
+    pub fn new() -> Computed<V> {
+        Computed::new_with_initial(V::default())
+    }
+}
 
 pub struct Derived<A, V> {
     value: V,

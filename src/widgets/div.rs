@@ -1,6 +1,7 @@
 use crate::{BoxLayout, Changed, Color, ComputedLayout, Direction, Element, Justify, Layout, LayoutInput, LayoutStyle, RenderContext, Sizing};
+use crate::interact::InteractSet;
 use crate::math::Axis;
-use crate::tracking::OnChangeToken;
+use crate::tracking::{Computed, OnChangeToken};
 use crate::widgets::Widget;
 
 fn to_tiny_skia_path<S: kurbo::Shape>(shape: S) -> tiny_skia::Path {
@@ -35,6 +36,7 @@ pub struct Div<A> {
     children: Vec<Element<A>>,
 
     children_model_changed: Changed,
+    interactions: Computed<InteractSet>,
 
     border_color: Option<Color>,
     background_color: Option<Color>,
@@ -56,6 +58,7 @@ impl<A> Div<A> {
             }),
             children: Vec::new(),
             children_model_changed: Changed::untracked(true),
+            interactions: Computed::new(),
             border_color: Some(Color::BLACK),
             background_color: None
         }
@@ -83,10 +86,6 @@ impl<A> Widget<A> for Div<A> {
     fn layout_cache(&self) -> &BoxLayout<A> { &self.layout_cache }
     fn layout_cache_mut(&mut self) -> &mut BoxLayout<A> { &mut self.layout_cache }
 
-    fn compute_layout(&mut self, input: LayoutInput) -> ComputedLayout {
-        self.layout_cache.compute_layout_with_children(input, &mut self.children)
-    }
-
     fn update_model(&mut self, model: &mut A) -> OnChangeToken {
         if self.children_model_changed.is_changed() {
             self.children_model_changed = Changed::any_changed(self.children
@@ -94,6 +93,24 @@ impl<A> Widget<A> for Div<A> {
                 .map(|child| child.update_model(model)));
         }
         self.children_model_changed.token()
+    }
+
+    fn interactions(&mut self) -> (OnChangeToken, InteractSet) {
+        self.interactions.maybe_update(|_| {
+            let mut set = InteractSet::default();
+            for child in self.children.iter_mut() {
+                let (token, child_set) = child.interactions();
+                token.notify_read();
+                set = set | child_set;
+            }
+            dbg!("New interactions: ", &set);
+            set
+        });
+        (self.interactions.token(), self.interactions.get_untracked().clone())
+    }
+
+    fn compute_layout(&mut self, input: LayoutInput) -> ComputedLayout {
+        self.layout_cache.compute_layout_with_children(input, &mut self.children)
     }
 
     fn draw(&mut self, context: &mut RenderContext, layout: &Layout) {

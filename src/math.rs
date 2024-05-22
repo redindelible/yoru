@@ -156,6 +156,26 @@ impl Rect {
         }
     }
 
+    pub fn bounding_box(rects: impl IntoIterator<Item=Rect>) -> Option<Rect> {
+        let mut rects = rects.into_iter();
+        let mut bounds = rects.next()?;
+        for rect in rects {
+            if rect.x < bounds.x {
+                bounds.x = rect.x;
+            }
+            if rect.y < bounds.y {
+                bounds.y = rect.y;
+            }
+            if rect.x + rect.w > bounds.x + bounds.w {
+                bounds.w = (rect.x + rect.w) - bounds.x;
+            }
+            if rect.y + rect.h > bounds.y + bounds.h {
+                bounds.h = (rect.y + rect.h) - bounds.y;
+            }
+        }
+        Some(bounds)
+    }
+
     pub fn left(&self) -> f32 {
         self.x
     }

@@ -2,6 +2,7 @@ use std::ops::IndexMut;
 
 use crate::{Widget, RenderContext};
 use crate::element::Element;
+use crate::interact::InteractSet;
 use crate::layout::{BoxLayout, ComputedLayout, Layout, LayoutInput};
 use crate::tracking::{Derived, OnChangeToken};
 
@@ -42,10 +43,6 @@ impl<A, S, O> Widget<A> for Select<A, S, O> where O: IndexMut<S, Output=Element<
         self.element_mut().props_mut()
     }
 
-    fn compute_layout(&mut self, input: LayoutInput) -> ComputedLayout {
-        self.element_mut().compute_layout(input)
-    }
-
     fn update_model(&mut self, model: &mut A) -> OnChangeToken {
         if let Some((old, new)) = self.selector.maybe_update(model) {
             if let Some(parent) = self.options[old].props().remove_parent() {
@@ -54,6 +51,14 @@ impl<A, S, O> Widget<A> for Select<A, S, O> where O: IndexMut<S, Output=Element<
             self.layout_cache_mut().invalidate();
         }
         self.selector.token()
+    }
+
+    fn interactions(&mut self) -> (OnChangeToken, InteractSet) {
+        self.element_mut().interactions()
+    }
+
+    fn compute_layout(&mut self, input: LayoutInput) -> ComputedLayout {
+        self.element_mut().compute_layout(input)
     }
 
     fn draw(&mut self, context: &mut RenderContext, _layout: &Layout) {

@@ -1,6 +1,7 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
-use crate::{BoxLayout, Color, ComputedLayout, Direction, Element, Justify, Layout, LayoutInput, LayoutStyle, math, RenderContext, Sizing};
+use crate::{BoxLayout, Changed, Color, ComputedLayout, Direction, Element, Justify, Layout, LayoutInput, LayoutStyle, math, RenderContext, Sizing};
+use crate::interact::InteractSet;
 use crate::math::Axis;
 use crate::tracking::{Derived, OnChangeToken};
 use crate::widgets::Widget;
@@ -124,6 +125,22 @@ impl<A> Widget<A> for Label<A> {
         &mut self.layout_cache
     }
 
+    fn update_model(&mut self, model: &mut A) -> OnChangeToken {
+        if let Some((_, new_value)) = self.text.maybe_update(model) {
+            FONTS.with_borrow_mut(|fonts| {
+                self.buffer.set_text(fonts, new_value, cosmic_text::Attrs::new(), cosmic_text::Shaping::Advanced);
+                self.sizing_buffer.set_text(fonts, new_value, cosmic_text::Attrs::new(), cosmic_text::Shaping::Advanced);
+            });
+
+            self.layout_cache.invalidate();
+        }
+        self.text.token()
+    }
+
+    fn interactions(&mut self) -> (OnChangeToken, InteractSet) {
+        (Changed::untracked(false).token(), InteractSet::default())
+    }
+
     fn compute_layout(&mut self, input: LayoutInput) -> ComputedLayout {
         self.layout_cache.compute_layout_leaf(input, |available_size, scale_factor| {
             FONTS.with_borrow_mut(|fonts| {
@@ -137,18 +154,6 @@ impl<A> Widget<A> for Label<A> {
                 math::Size::new(max_width, total_height)
             })
         })
-    }
-
-    fn update_model(&mut self, model: &mut A) -> OnChangeToken {
-        if let Some((_, new_value)) = self.text.maybe_update(model) {
-            FONTS.with_borrow_mut(|fonts| {
-                self.buffer.set_text(fonts, new_value, cosmic_text::Attrs::new(), cosmic_text::Shaping::Advanced);
-                self.sizing_buffer.set_text(fonts, new_value, cosmic_text::Attrs::new(), cosmic_text::Shaping::Advanced);
-            });
-
-            self.layout_cache.invalidate();
-        }
-        self.text.token()
     }
 
     fn draw(&mut self, context: &mut RenderContext, layout: &Layout) {

@@ -1,5 +1,6 @@
 use std::convert::identity;
 use crate::{math, RenderContext, Widget};
+use crate::interact::InteractSet;
 use crate::layout::{BoxLayout, LayoutInput, ComputedLayout};
 use crate::tracking::OnChangeToken;
 
@@ -51,6 +52,10 @@ impl<A> Element<A> {
 
     pub fn compute_layout(&mut self, input: LayoutInput) -> ComputedLayout {
         self.0.compute_layout(input)
+    }
+
+    pub fn interactions(&mut self) -> (OnChangeToken, InteractSet) {
+        self.0.interactions()
     }
 
     pub fn draw(&mut self, context: &mut RenderContext) {
