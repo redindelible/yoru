@@ -2,7 +2,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use crate::{BoxLayout, Color, ComputedLayout, Direction, Element, Justify, Layout, LayoutInput, LayoutStyle, math, RenderContext, Sizing};
 use crate::math::Axis;
-use crate::tracking::Derived;
+use crate::tracking::{Derived, OnChangeToken};
 use crate::widgets::Widget;
 
 thread_local! {
@@ -139,8 +139,8 @@ impl<A> Widget<A> for Label<A> {
         })
     }
 
-    fn update_model(&mut self, model: &mut A) {
-        if let Some(new_value) = self.text.maybe_update(model) {
+    fn update_model(&mut self, model: &mut A) -> OnChangeToken {
+        if let Some((_, new_value)) = self.text.maybe_update(model) {
             FONTS.with_borrow_mut(|fonts| {
                 self.buffer.set_text(fonts, new_value, cosmic_text::Attrs::new(), cosmic_text::Shaping::Advanced);
                 self.sizing_buffer.set_text(fonts, new_value, cosmic_text::Attrs::new(), cosmic_text::Shaping::Advanced);
@@ -148,6 +148,7 @@ impl<A> Widget<A> for Label<A> {
 
             self.layout_cache.invalidate();
         }
+        self.text.token()
     }
 
     fn draw(&mut self, context: &mut RenderContext, layout: &Layout) {

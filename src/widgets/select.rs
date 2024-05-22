@@ -1,32 +1,29 @@
-use std::cell::Cell;
 use std::ops::IndexMut;
-use crate::{BoxLayout, ComputedLayout, Element, Layout, LayoutInput, RenderContext, Widget};
-use crate::tracking::Changed;
+
+use crate::{Widget, RenderContext};
+use crate::element::Element;
+use crate::layout::{BoxLayout, ComputedLayout, Layout, LayoutInput};
+use crate::tracking::{Derived, OnChangeToken};
 
 pub struct Select<A, S, O> {
-    dirty: Changed,
-    cached: Cell<S>,
-
+    selector: Derived<A, S>,
     options: O,
-    selector: Box<dyn Fn(&mut A) -> S>,
 }
 
 impl<A, S, O> Select<A, S, O> where O: IndexMut<S, Output=Element<A>> + 'static, S: Copy + 'static {
     pub fn new(starting: S, options: O, selector: impl (Fn(&mut A) -> S) + 'static) -> Self {
         Select {
-            dirty: Changed::untracked(true),
-            cached: Cell::new(starting),
             options,
-            selector: Box::new(selector),
+            selector: Derived::new_with_initial(starting, selector),
         }
     }
 
     pub fn element(&self) -> &Element<A> {
-        &self.options[self.cached.get()]
+        &self.options[*self.selector.get_uncached()]
     }
 
     pub fn element_mut(&mut self) -> &mut Element<A> {
-        &mut self.options[self.cached.get()]
+        &mut self.options[*self.selector.get_uncached()]
     }
 }
 
@@ -49,16 +46,14 @@ impl<A, S, O> Widget<A> for Select<A, S, O> where O: IndexMut<S, Output=Element<
         self.element_mut().compute_layout(input)
     }
 
-    fn update_model(&mut self, model: &mut A) {
-        if self.dirty.is_changed() {
-            let (dirty, index) = Changed::run_and_track(|| (self.selector)(model));
-            let old_index = self.cached.replace(index);
-            if let Some(parent) = self.options[old_index].props().remove_parent() {
-                self.options[index].props().set_parent(&parent);
+    fn update_model(&mut self, model: &mut A) -> OnChangeToken {
+        if let Some((old, new)) = self.selector.maybe_update(model) {
+            if let Some(parent) = self.options[old].props().remove_parent() {
+                self.options[*new].props().set_parent(parent);
             }
-
-            self.dirty = dirty;
+            self.layout_cache_mut().invalidate();
         }
+        self.selector.token()
     }
 
     fn draw(&mut self, context: &mut RenderContext, _layout: &Layout) {

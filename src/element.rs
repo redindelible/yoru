@@ -1,6 +1,7 @@
 use std::convert::identity;
 use crate::{math, RenderContext, Widget};
 use crate::layout::{BoxLayout, LayoutInput, ComputedLayout};
+use crate::tracking::OnChangeToken;
 
 
 pub struct Root<A>(Element<A>);
@@ -44,7 +45,7 @@ impl<A> Element<A> {
         self.0.layout_cache_mut()
     }
 
-    pub fn update_model(&mut self, model: &mut A) {
+    pub fn update_model(&mut self, model: &mut A) -> OnChangeToken {
         self.0.update_model(model)
     }
 

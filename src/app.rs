@@ -13,14 +13,14 @@ use crate::element::Root;
 use crate::{math, RenderContext};
 
 fn timed<T>(message: &str, f: impl FnOnce() -> T) -> T {
-    f()
-    // use std::time::Instant;
-    //
-    // let now = Instant::now();
-    // let ret = f();
-    // let time = Instant::now() - now;
-    // eprintln!("{}: {} sec", message, time.as_secs_f32());
-    // ret
+    // f()
+    use std::time::Instant;
+
+    let now = Instant::now();
+    let ret = f();
+    let time = Instant::now() - now;
+    eprintln!("{}: {} sec", message, time.as_secs_f32());
+    ret
 }
 
 struct ActiveApplication {

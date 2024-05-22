@@ -1,5 +1,6 @@
-use crate::{BoxLayout, Color, ComputedLayout, Direction, Element, Justify, Layout, LayoutInput, LayoutStyle, RenderContext, Sizing};
+use crate::{BoxLayout, Changed, Color, ComputedLayout, Direction, Element, Justify, Layout, LayoutInput, LayoutStyle, RenderContext, Sizing};
 use crate::math::Axis;
+use crate::tracking::OnChangeToken;
 use crate::widgets::Widget;
 
 fn to_tiny_skia_path<S: kurbo::Shape>(shape: S) -> tiny_skia::Path {
@@ -33,6 +34,8 @@ pub struct Div<A> {
     layout_cache: BoxLayout<A>,
     children: Vec<Element<A>>,
 
+    children_model_changed: Changed,
+
     border_color: Option<Color>,
     background_color: Option<Color>,
 }
@@ -52,6 +55,7 @@ impl<A> Div<A> {
                 cross_justify: Justify::Min
             }),
             children: Vec::new(),
+            children_model_changed: Changed::untracked(true),
             border_color: Some(Color::BLACK),
             background_color: None
         }
@@ -59,6 +63,7 @@ impl<A> Div<A> {
 
     pub fn add_child(&mut self, element: impl Into<Element<A>>) {
         let element = element.into();
+        element.props().set_parent(self.layout_cache.as_parent());
         self.layout_cache.invalidate();
         self.children.push(element);
     }
@@ -82,12 +87,13 @@ impl<A> Widget<A> for Div<A> {
         self.layout_cache.compute_layout_with_children(input, &mut self.children)
     }
 
-    fn update_model(&mut self, model: &mut A) {
-        // todo the caching needs to be tracked somehow
-        //   similar to layout, but the current doesn't need to be rerun if a child is out of date
-        for child in &mut self.children {
-            child.update_model(model);
+    fn update_model(&mut self, model: &mut A) -> OnChangeToken {
+        if self.children_model_changed.is_changed() {
+            self.children_model_changed = Changed::any_changed(self.children
+                .iter_mut()
+                .map(|child| child.update_model(model)));
         }
+        self.children_model_changed.token()
     }
 
     fn draw(&mut self, context: &mut RenderContext, layout: &Layout) {

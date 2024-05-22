@@ -36,8 +36,10 @@ impl CachedLayout {
     }
 }
 
+pub struct LayoutParent(Weak<LayoutCacheInner>);
+
 struct LayoutCacheInner {
-    parent: RefCell<Option<Weak<LayoutCacheInner>>>,
+    parent: RefCell<Option<LayoutParent>>,
     cached_unknown: CachedLayout,
     cached_known: CachedLayout,
     cached_final: CachedLayout,
@@ -59,7 +61,7 @@ impl LayoutCache {
             strong_curr.cached_unknown.is_valid.set(false);
             strong_curr.cached_known.is_valid.set(false);
             strong_curr.cached_final.is_valid.set(false);
-            curr = strong_curr.parent.borrow().as_ref().and_then(Weak::upgrade);
+            curr = strong_curr.parent.borrow().as_ref().and_then(|parent| parent.0.upgrade());
         }
     }
 
@@ -146,13 +148,17 @@ impl<A> BoxLayout<A> {
         &self.attrs
     }
 
-    pub fn remove_parent(&self) -> Option<LayoutCache> {
-        self.cache.0.parent.borrow_mut().take().as_ref().and_then(Weak::upgrade).map(LayoutCache)
+    pub fn remove_parent(&self) -> Option<LayoutParent> {
+        self.cache.0.parent.borrow_mut().take()
     }
 
-    pub fn set_parent(&self, parent: &LayoutCache) {
-        let old_parent = self.cache.0.parent.borrow_mut().replace(Rc::downgrade(&parent.0));
+    pub fn set_parent(&self, parent: LayoutParent) {
+        let old_parent = self.cache.0.parent.borrow_mut().replace(parent);
         assert!(old_parent.is_none());
+    }
+
+    pub fn as_parent(&self) -> LayoutParent {
+        LayoutParent(Rc::downgrade(&self.cache.0))
     }
 
     pub fn invalidate(&mut self) {
@@ -166,7 +172,13 @@ impl<A> BoxLayout<A> {
         let border_box = margin_box.shrink_by(scale_factor * (self.attrs.margin + 0.5 * math::SizeRect::from_border(self.attrs.border_size)));
         let padding_box = margin_box.shrink_by(scale_factor * (self.attrs.margin + math::SizeRect::from_border(self.attrs.border_size)));
         let content_box = margin_box.shrink_by(scale_factor * (self.attrs.margin + self.attrs.padding + math::SizeRect::from_border(self.attrs.border_size)));
-        let layout = Layout { margin_box, border_box, padding_box, content_box, scale_factor };
+        let layout = Layout {
+            margin_box: margin_box.clamp_positive(),
+            border_box: border_box.clamp_positive(),
+            padding_box: padding_box.clamp_positive(),
+            content_box: content_box.clamp_positive(),
+            scale_factor
+        };
         if cache.is_valid.get() {
             Ok(layout)
         } else {
