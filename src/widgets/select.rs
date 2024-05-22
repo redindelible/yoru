@@ -2,7 +2,7 @@ use std::ops::IndexMut;
 
 use crate::{Widget, RenderContext};
 use crate::element::Element;
-use crate::interact::InteractSet;
+use crate::interact::{Interaction, InteractSet};
 use crate::layout::{BoxLayout, ComputedLayout, Layout, LayoutInput};
 use crate::tracking::{Derived, OnChangeToken};
 
@@ -41,6 +41,10 @@ impl<A, S, O> Widget<A> for Select<A, S, O> where O: IndexMut<S, Output=Element<
 
     fn layout_cache_mut(&mut self) -> &mut BoxLayout<A> {
         self.element_mut().props_mut()
+    }
+
+    fn handle_interaction(&mut self, interaction: &Interaction) {
+        self.element_mut().handle_interaction(interaction)
     }
 
     fn update_model(&mut self, model: &mut A) -> OnChangeToken {

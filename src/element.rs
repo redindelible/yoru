@@ -1,6 +1,6 @@
 use std::convert::identity;
 use crate::{math, RenderContext, Widget};
-use crate::interact::InteractSet;
+use crate::interact::{Interaction, InteractSet};
 use crate::layout::{BoxLayout, LayoutInput, ComputedLayout};
 use crate::tracking::OnChangeToken;
 
@@ -10,6 +10,10 @@ pub struct Root<A>(Element<A>);
 impl<A> Root<A> {
     pub fn new(element: Element<A>) -> Root<A> {
         Root(element)
+    }
+
+    pub fn handle_interaction(&mut self, interaction: &Interaction) {
+        self.0.handle_interaction(interaction)
     }
 
     pub fn update_model(&mut self, model: &mut A) {
@@ -48,6 +52,10 @@ impl<A> Element<A> {
 
     pub fn update_model(&mut self, model: &mut A) -> OnChangeToken {
         self.0.update_model(model)
+    }
+
+    pub fn handle_interaction(&mut self, interaction: &Interaction) {
+        self.0.handle_interaction(interaction)
     }
 
     pub fn compute_layout(&mut self, input: LayoutInput) -> ComputedLayout {

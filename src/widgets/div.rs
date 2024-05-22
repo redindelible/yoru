@@ -1,5 +1,5 @@
 use crate::{BoxLayout, Changed, Color, ComputedLayout, Direction, Element, Justify, Layout, LayoutInput, LayoutStyle, RenderContext, Sizing};
-use crate::interact::InteractSet;
+use crate::interact::{Interaction, InteractSet};
 use crate::math::Axis;
 use crate::tracking::{Computed, OnChangeToken};
 use crate::widgets::Widget;
@@ -85,6 +85,12 @@ impl<A: 'static> From<Div<A>> for Element<A> {
 impl<A> Widget<A> for Div<A> {
     fn layout_cache(&self) -> &BoxLayout<A> { &self.layout_cache }
     fn layout_cache_mut(&mut self) -> &mut BoxLayout<A> { &mut self.layout_cache }
+
+    fn handle_interaction(&mut self, interaction: &Interaction) {
+        for child in self.children.iter_mut() {
+            child.handle_interaction(interaction)
+        }
+    }
 
     fn update_model(&mut self, model: &mut A) -> OnChangeToken {
         if self.children_model_changed.is_changed() {

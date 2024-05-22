@@ -1,4 +1,5 @@
 use bytemuck::Zeroable;
+use winit::event::{ElementState, MouseButton, WindowEvent};
 
 use crate::math;
 
@@ -36,3 +37,35 @@ impl std::ops::BitOr for InteractSet {
     }
 }
 
+
+#[derive(Debug)]
+pub enum Interaction {
+    Click(math::Point)
+}
+
+
+pub(crate) struct InteractionState {
+    cursor_position: math::Point
+}
+
+impl InteractionState {
+    pub fn new() -> InteractionState {
+        InteractionState {
+            cursor_position: math::Point::zeroed()
+        }
+    }
+
+    pub fn handle_window_event(&mut self, event: WindowEvent, send_interaction: impl FnOnce(Interaction)) {
+        match event {
+            WindowEvent::CursorMoved { position, .. } => {
+                self.cursor_position = math::Point::new(position.x as f32, position.y as f32)
+            }
+            WindowEvent::MouseInput { button, state, .. } => {
+                if button == MouseButton::Left && state == ElementState::Released {
+                    send_interaction(Interaction::Click(self.cursor_position))
+                }
+            }
+            _ => ()
+        }
+    }
+}

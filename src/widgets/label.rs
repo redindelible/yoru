@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 use crate::{BoxLayout, Changed, Color, ComputedLayout, Direction, Element, Justify, Layout, LayoutInput, LayoutStyle, math, RenderContext, Sizing};
-use crate::interact::InteractSet;
+use crate::interact::{Interaction, InteractSet};
 use crate::math::Axis;
 use crate::tracking::{Derived, OnChangeToken};
 use crate::widgets::Widget;
@@ -123,6 +123,10 @@ impl<A> Widget<A> for Label<A> {
 
     fn layout_cache_mut(&mut self) -> &mut BoxLayout<A> {
         &mut self.layout_cache
+    }
+
+    fn handle_interaction(&mut self, _interaction: &Interaction) {
+        dbg!(_interaction);
     }
 
     fn update_model(&mut self, model: &mut A) -> OnChangeToken {

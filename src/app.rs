@@ -11,6 +11,7 @@ use softbuffer::Surface;
 use crate::style::Color;
 use crate::element::Root;
 use crate::{math, RenderContext};
+use crate::interact::InteractionState;
 
 fn timed<T>(message: &str, f: impl FnOnce() -> T) -> T {
     // f()
@@ -36,7 +37,9 @@ pub struct Application<A> {
     scale_factor: f32,
 
     state: A,
-    to_draw: Root<A>
+    to_draw: Root<A>,
+
+    interaction_state: InteractionState
 }
 
 impl<A> Application<A> {
@@ -48,7 +51,9 @@ impl<A> Application<A> {
             scale_factor: 1.0,
 
             state,
-            to_draw
+            to_draw,
+
+            interaction_state: InteractionState::new()
         }
     }
 
@@ -109,10 +114,9 @@ impl<A> winit::application::ApplicationHandler for Application<A> {
                 self.active = None;
                 event_loop.exit();
             }
-            WindowEvent::MouseInput { .. } => {
-                window.request_redraw();
+            event => {
+                self.interaction_state.handle_window_event(event, |interact| self.to_draw.handle_interaction(&interact))
             }
-            _ => { }
         }
     }
 

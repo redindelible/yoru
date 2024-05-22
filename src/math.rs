@@ -18,8 +18,8 @@ impl Axis {
     }
 }
 
-#[repr(C)]
 #[derive(Copy, Clone, PartialEq, Debug, Zeroable, Pod)]
+#[repr(C)]
 pub struct Point {
     pub x: f32,
     pub y: f32
@@ -36,6 +36,62 @@ impl From<(f32, f32)> for Point {
         Point { x: value.0, y: value.1 }
     }
 }
+
+
+impl Sub for Point {
+    type Output = Vector;
+
+    fn sub(self, rhs: Self) -> Self::Output {
+        Vector::new(self.x - rhs.x, self.y - rhs.y)
+    }
+}
+
+impl Add<Vector> for Point {
+    type Output = Point;
+
+    fn add(self, rhs: Vector) -> Self::Output {
+        Point::new(self.x + rhs.x, self.y + rhs.y)
+    }
+}
+
+
+#[derive(Copy, Clone, PartialEq, Debug, Zeroable, Pod)]
+#[repr(C)]
+pub struct Vector {
+    pub x: f32,
+    pub y: f32
+}
+
+impl Vector {
+    pub fn new(x: f32, y: f32) -> Vector {
+        Vector { x, y }
+    }
+}
+
+impl Add for Vector {
+    type Output = Vector;
+
+    fn add(self, rhs: Self) -> Self::Output {
+        Vector::new(self.x + rhs.x, self.y + rhs.y)
+    }
+}
+
+impl Sub for Vector {
+    type Output = Vector;
+
+    fn sub(self, rhs: Self) -> Self::Output {
+        Vector::new(self.x - rhs.x, self.y - rhs.y)
+    }
+}
+
+impl Add<Point> for Vector {
+    type Output = Point;
+
+    fn add(self, rhs: Point) -> Self::Output {
+        Point::new(self.x + rhs.x, self.y + rhs.y)
+    }
+}
+
 
 #[derive(Copy, Clone, PartialEq, Debug, Zeroable, Pod)]
 #[repr(C)]
@@ -73,6 +129,10 @@ impl Size {
             Axis::Vertical => self.vertical,
             Axis::Horizontal => self.horizontal
         }
+    }
+
+    pub fn as_vector(&self) -> Vector {
+        Vector::new(self.horizontal, self.vertical)
     }
 
     pub fn clamp_positive(&self) -> Size {
