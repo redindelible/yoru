@@ -153,6 +153,14 @@ impl<V> Computed<V> {
         &self.value
     }
 
+    pub fn is_dirty(&self) -> bool {
+        self.changed.is_changed()
+    }
+
+    pub fn invalidate(&self) {
+        self.changed.0.set();
+    }
+
     pub fn maybe_update(&mut self, f: impl FnOnce(&V) -> V) -> Option<(V, &V)> {
         if self.changed.is_changed() {
             let (changed, value) = Changed::run_and_track(|| f(&self.value));

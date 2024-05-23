@@ -102,6 +102,8 @@ impl<A> winit::application::ApplicationHandler for Application<A> {
                 timed("Update Model", || self.to_draw.update_model(&mut self.state));
                 timed("Update Layout", || self.to_draw.compute_layout(self.viewport, self.scale_factor));
 
+                timed("Update Interactions", || self.to_draw.interactions());
+
                 let mut render_context = RenderContext {
                     canvas: pixmap
                 };
@@ -115,7 +117,7 @@ impl<A> winit::application::ApplicationHandler for Application<A> {
                 event_loop.exit();
             }
             event => {
-                self.interaction_state.handle_window_event(event, |interact| self.to_draw.handle_interaction(&interact))
+                self.interaction_state.handle_window_event(event, |interact| self.to_draw.handle_interaction(&interact, &mut self.state))
             }
         }
     }

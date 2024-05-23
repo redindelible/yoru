@@ -4,7 +4,9 @@ use crate::math::Axis;
 use crate::tracking::{Computed, OnChangeToken};
 use crate::widgets::Widget;
 
-fn to_tiny_skia_path<S: kurbo::Shape>(shape: S) -> tiny_skia::Path {
+
+// todo move somewhere reasonable
+pub fn to_tiny_skia_path<S: kurbo::Shape>(shape: S) -> tiny_skia::Path {
     use kurbo::Point;
 
     let mut path_builder = tiny_skia::PathBuilder::new();
@@ -68,6 +70,7 @@ impl<A> Div<A> {
         let element = element.into();
         element.props().set_parent(self.layout_cache.as_parent());
         self.layout_cache.invalidate();
+        self.interactions.invalidate();
         self.children.push(element);
     }
 
@@ -86,9 +89,11 @@ impl<A> Widget<A> for Div<A> {
     fn layout_cache(&self) -> &BoxLayout<A> { &self.layout_cache }
     fn layout_cache_mut(&mut self) -> &mut BoxLayout<A> { &mut self.layout_cache }
 
-    fn handle_interaction(&mut self, interaction: &Interaction) {
-        for child in self.children.iter_mut() {
-            child.handle_interaction(interaction)
+    fn handle_interaction(&mut self, interaction: &Interaction, model: &mut A) {
+        if self.interactions.get_untracked().accepts(interaction) {
+            for child in self.children.iter_mut() {
+                child.handle_interaction(interaction, model)
+            }
         }
     }
 
@@ -101,7 +106,11 @@ impl<A> Widget<A> for Div<A> {
         self.children_model_changed.token()
     }
 
-    fn interactions(&mut self) -> (OnChangeToken, InteractSet) {
+    fn compute_layout(&mut self, input: LayoutInput) -> ComputedLayout {
+        self.layout_cache.compute_layout_with_children(input, &mut self.children)
+    }
+
+    fn interactions(&mut self, _layout: &Layout) -> (OnChangeToken, InteractSet) {
         self.interactions.maybe_update(|_| {
             let mut set = InteractSet::default();
             for child in self.children.iter_mut() {
@@ -109,21 +118,16 @@ impl<A> Widget<A> for Div<A> {
                 token.notify_read();
                 set = set | child_set;
             }
-            dbg!("New interactions: ", &set);
             set
         });
         (self.interactions.token(), self.interactions.get_untracked().clone())
-    }
-
-    fn compute_layout(&mut self, input: LayoutInput) -> ComputedLayout {
-        self.layout_cache.compute_layout_with_children(input, &mut self.children)
     }
 
     fn draw(&mut self, context: &mut RenderContext, layout: &Layout) {
         let border_size = self.layout_cache.attrs().border_size * layout.scale_factor;
         if let Some(border_color) = self.border_color {
             if border_size > 0.0 {
-                let border_box = layout.border_box;
+                let border_box = layout.half_border_box;
                 let path = to_tiny_skia_path(kurbo::Rect::from(border_box));
                 let mut stroke = tiny_skia::Stroke::default();
                 stroke.width = border_size;

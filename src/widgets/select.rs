@@ -43,8 +43,8 @@ impl<A, S, O> Widget<A> for Select<A, S, O> where O: IndexMut<S, Output=Element<
         self.element_mut().props_mut()
     }
 
-    fn handle_interaction(&mut self, interaction: &Interaction) {
-        self.element_mut().handle_interaction(interaction)
+    fn handle_interaction(&mut self, interaction: &Interaction, model: &mut A) {
+        self.element_mut().handle_interaction(interaction, model)
     }
 
     fn update_model(&mut self, model: &mut A) -> OnChangeToken {
@@ -57,12 +57,12 @@ impl<A, S, O> Widget<A> for Select<A, S, O> where O: IndexMut<S, Output=Element<
         self.selector.token()
     }
 
-    fn interactions(&mut self) -> (OnChangeToken, InteractSet) {
-        self.element_mut().interactions()
-    }
-
     fn compute_layout(&mut self, input: LayoutInput) -> ComputedLayout {
         self.element_mut().compute_layout(input)
+    }
+
+    fn interactions(&mut self, _layout: &Layout) -> (OnChangeToken, InteractSet) {
+        self.element_mut().interactions()
     }
 
     fn draw(&mut self, context: &mut RenderContext, _layout: &Layout) {

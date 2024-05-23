@@ -218,22 +218,27 @@ impl Rect {
 
     pub fn bounding_box(rects: impl IntoIterator<Item=Rect>) -> Option<Rect> {
         let mut rects = rects.into_iter();
-        let mut bounds = rects.next()?;
+        let first = rects.next()?;
+
+        let mut min_left = first.left();
+        let mut min_top = first.top();
+        let mut max_right = first.right();
+        let mut max_bottom = first.bottom();
         for rect in rects {
-            if rect.x < bounds.x {
-                bounds.x = rect.x;
+            if rect.left() < min_left {
+                min_left = rect.left();
             }
-            if rect.y < bounds.y {
-                bounds.y = rect.y;
+            if rect.top() < min_top {
+                min_top = rect.top();
             }
-            if rect.x + rect.w > bounds.x + bounds.w {
-                bounds.w = (rect.x + rect.w) - bounds.x;
+            if rect.right() > max_right {
+                max_right = rect.right();
             }
-            if rect.y + rect.h > bounds.y + bounds.h {
-                bounds.h = (rect.y + rect.h) - bounds.y;
+            if rect.bottom() > max_bottom {
+                max_bottom = rect.bottom();
             }
         }
-        Some(bounds)
+        Some(Rect::from_lrtb(min_left, max_right, min_top, max_bottom))
     }
 
     pub fn left(&self) -> f32 {
@@ -274,6 +279,10 @@ impl Rect {
 
     pub fn size(&self) -> Size {
         Size::new(self.w, self.h)
+    }
+
+    pub fn contains(&self, point: Point) -> bool {
+        (self.left()..=self.right()).contains(&point.x) && (self.top()..=self.bottom()).contains(&point.y)
     }
 
     pub fn clamp_positive(&self) -> Rect {

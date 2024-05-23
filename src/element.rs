@@ -12,8 +12,8 @@ impl<A> Root<A> {
         Root(element)
     }
 
-    pub fn handle_interaction(&mut self, interaction: &Interaction) {
-        self.0.handle_interaction(interaction)
+    pub fn handle_interaction(&mut self, interaction: &Interaction, model: &mut A) {
+        self.0.handle_interaction(interaction, model)
     }
 
     pub fn update_model(&mut self, model: &mut A) {
@@ -25,6 +25,11 @@ impl<A> Root<A> {
             allocated: math::Rect::from_topleft_size((0.0, 0.0).into(), viewport),
             scale_factor
         });
+    }
+
+    // todo does this really need to be called from the loop?
+    pub fn interactions(&mut self) {
+        self.0.interactions();
     }
 
     pub fn draw(&mut self, context: &mut RenderContext) {
@@ -54,8 +59,8 @@ impl<A> Element<A> {
         self.0.update_model(model)
     }
 
-    pub fn handle_interaction(&mut self, interaction: &Interaction) {
-        self.0.handle_interaction(interaction)
+    pub fn handle_interaction(&mut self, interaction: &Interaction, model: &mut A) {
+        self.0.handle_interaction(interaction, model)
     }
 
     pub fn compute_layout(&mut self, input: LayoutInput) -> ComputedLayout {
@@ -63,7 +68,8 @@ impl<A> Element<A> {
     }
 
     pub fn interactions(&mut self) -> (OnChangeToken, InteractSet) {
-        self.0.interactions()
+        let layout = self.0.layout_cache().get_final_layout().unwrap_or_else(identity);
+        self.0.interactions(&layout)
     }
 
     pub fn draw(&mut self, context: &mut RenderContext) {

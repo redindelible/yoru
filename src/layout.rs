@@ -123,6 +123,7 @@ impl LayoutInput {
 pub struct Layout {
     pub margin_box: math::Rect,
     pub border_box: math::Rect,
+    pub half_border_box: math::Rect,
     pub padding_box: math::Rect,
     pub content_box: math::Rect,
     pub scale_factor: f32,
@@ -169,12 +170,14 @@ impl<A> BoxLayout<A> {
         let cache = &self.cache.0.cached_final;
         let margin_box = cache.cached.get().margin_box;
         let scale_factor = cache.with_input.get().scale_factor();
-        let border_box = margin_box.shrink_by(scale_factor * (self.attrs.margin + 0.5 * math::SizeRect::from_border(self.attrs.border_size)));
+        let border_box = margin_box.shrink_by(scale_factor * self.attrs.margin);
+        let half_border_box = margin_box.shrink_by(scale_factor * (self.attrs.margin + 0.5 * math::SizeRect::from_border(self.attrs.border_size)));
         let padding_box = margin_box.shrink_by(scale_factor * (self.attrs.margin + math::SizeRect::from_border(self.attrs.border_size)));
         let content_box = margin_box.shrink_by(scale_factor * (self.attrs.margin + self.attrs.padding + math::SizeRect::from_border(self.attrs.border_size)));
         let layout = Layout {
             margin_box: margin_box.clamp_positive(),
             border_box: border_box.clamp_positive(),
+            half_border_box: half_border_box.clamp_positive(),
             padding_box: padding_box.clamp_positive(),
             content_box: content_box.clamp_positive(),
             scale_factor

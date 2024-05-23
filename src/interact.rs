@@ -17,6 +17,16 @@ pub struct InteractSet {
     pub click_area: math::Rect
 }
 
+impl InteractSet {
+    pub fn accepts(&self, interaction: &Interaction) -> bool {
+        match interaction {
+            Interaction::Click(point) => {
+                self.click && self.click_area.contains(*point)
+            }
+        }
+    }
+}
+
 impl Default for InteractSet {
     fn default() -> Self {
         InteractSet {

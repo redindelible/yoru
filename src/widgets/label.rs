@@ -125,8 +125,8 @@ impl<A> Widget<A> for Label<A> {
         &mut self.layout_cache
     }
 
-    fn handle_interaction(&mut self, _interaction: &Interaction) {
-        dbg!(_interaction);
+    fn handle_interaction(&mut self, _interaction: &Interaction, _model: &mut A) {
+
     }
 
     fn update_model(&mut self, model: &mut A) -> OnChangeToken {
@@ -139,10 +139,6 @@ impl<A> Widget<A> for Label<A> {
             self.layout_cache.invalidate();
         }
         self.text.token()
-    }
-
-    fn interactions(&mut self) -> (OnChangeToken, InteractSet) {
-        (Changed::untracked(false).token(), InteractSet::default())
     }
 
     fn compute_layout(&mut self, input: LayoutInput) -> ComputedLayout {
@@ -158,6 +154,10 @@ impl<A> Widget<A> for Label<A> {
                 math::Size::new(max_width, total_height)
             })
         })
+    }
+
+    fn interactions(&mut self, _layout: &Layout) -> (OnChangeToken, InteractSet) {
+        (Changed::untracked(false).token(), InteractSet::default())
     }
 
     fn draw(&mut self, context: &mut RenderContext, layout: &Layout) {
