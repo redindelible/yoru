@@ -6,7 +6,7 @@ mod style;
 pub mod math;
 mod layout;
 pub mod widgets;
-mod tracking;
+pub mod tracking;
 mod interact;
 
 pub use crate::element::{Element, Root};

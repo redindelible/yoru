@@ -117,7 +117,10 @@ impl<A> winit::application::ApplicationHandler for Application<A> {
                 event_loop.exit();
             }
             event => {
-                self.interaction_state.handle_window_event(event, |interact| self.to_draw.handle_interaction(&interact, &mut self.state))
+                let was_handled = self.interaction_state.handle_window_event(event, |interact| self.to_draw.handle_interaction(&interact, &mut self.state));
+                if was_handled && self.to_draw.needs_redraw() {
+                    window.request_redraw();
+                }
             }
         }
     }

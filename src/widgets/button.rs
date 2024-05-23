@@ -1,8 +1,11 @@
 use std::convert::identity;
-use crate::{BoxLayout, Changed, Color, ComputedLayout, Direction, Element, Justify, Label, Layout, LayoutInput, LayoutStyle, math, RenderContext, Sizing};
+
+use crate::style::{Color, Direction, LayoutStyle, Justify, Sizing};
+use crate::layout::{BoxLayout, ComputedLayout, Layout, LayoutInput};
+use crate::{Element, Label, RenderContext};
 use crate::interact::{Interaction, InteractSet};
-use crate::math::Axis;
-use crate::tracking::{Computed, Derived, OnChangeToken};
+use crate::math::{Axis};
+use crate::tracking::{Computed, OnChangeToken};
 use crate::widgets::div::to_tiny_skia_path;
 use crate::widgets::Widget;
 
@@ -18,20 +21,21 @@ pub struct Button<A> {
 
 impl<A: 'static> Button<A> {
     pub fn new(inner: Label<A>, on_click: impl Fn(&mut A) + 'static) -> Button<A> {
-        Button {
-            layout_cache: BoxLayout::new(LayoutStyle {
-                border_size: 2.0,
-                padding: 2.0.into(),
-                margin: 1.0.into(),
-                width: Sizing::Fit,
-                height: Sizing::Fit,
-                // todo make a ContainerLayoutCache so that leaf elements don't need this?
-                main_axis: Axis::Vertical,
-                main_direction: Direction::Positive,
-                main_justify: Justify::Center,
-                cross_justify: Justify::Center
-            }),
+        let layout_cache = BoxLayout::new(LayoutStyle {
+            border_size: 2.0,
+            padding: 2.0.into(),
+            margin: 1.0.into(),
+            width: Sizing::Fit,
+            height: Sizing::Fit,
+            main_axis: Axis::Vertical,
+            main_direction: Direction::Positive,
+            main_justify: Justify::Center,
+            cross_justify: Justify::Center
+        });
+        inner.layout_cache().set_parent(layout_cache.as_parent());
 
+        Button {
+            layout_cache,
             interactions: Computed::new(),
 
             inner: inner.into(),
