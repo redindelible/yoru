@@ -1,5 +1,6 @@
-use yoru::{Element, div, Application, Root, Sizing, Color, Label, Signal};
+use yoru::{Element, div, Application, Root, Sizing, Color, Label};
 use yoru::widgets::Button;
+use yoru::tracking::{ReadableSignal, RwSignal};
 
 // const EXAMPLE_TEXT: &'static str = r"Lorem ipsum dolor sit amet, consectetur adipiscing elit. Donec tincidunt nunc lacus, nec finibus dolor sollicitudin tristique. Suspendisse sed magna sed felis fringilla tempus vel sit amet arcu. Praesent quis quam a nibh pretium blandit. Phasellus viverra nunc tempus ullamcorper euismod. Curabitur consequat posuere dolor, vitae auctor velit viverra eget. Nullam pellentesque rutrum enim, vitae congue nunc lacinia blandit. Nullam at nibh lacus. Suspendisse purus neque, venenatis at pulvinar sit amet, semper eu tortor. Nulla facilisi. Interdum et malesuada fames ac ante ipsum primis in faucibus.
 //
@@ -14,11 +15,11 @@ use yoru::widgets::Button;
 const EXAMPLE_TEXT: &'static str = "Hullo";
 
 struct Model {
-    num: Signal<i32>
+    num: RwSignal<i32>
 }
 
 fn main() {
-    let model = Model { num: Signal::new(7) };
+    let model = Model { num: RwSignal::new(7) };
 
     let b: Element<Model> = div!(width=Sizing::Fit, margin=10.0, background=Color::LIGHT_GRAY, [
         div!(width=Sizing::Expand, height=Sizing::Fixed(10.0)),

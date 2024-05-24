@@ -1,7 +1,7 @@
-use crate::{BoxLayout, Changed, Color, ComputedLayout, Direction, Element, Justify, Layout, LayoutInput, LayoutStyle, RenderContext, Sizing};
+use crate::{BoxLayout, Color, ComputedLayout, Direction, Element, Justify, Layout, LayoutInput, LayoutStyle, RenderContext, Sizing};
 use crate::interact::{Interaction, InteractSet};
 use crate::math::Axis;
-use crate::tracking::{Computed, OnChangeToken};
+use crate::tracking::{Computed, Derived, ReadableSignal, ReadSignal, Trigger};
 use crate::widgets::Widget;
 
 
@@ -37,7 +37,7 @@ pub struct Div<A> {
     layout_cache: BoxLayout<A>,
     children: Vec<Element<A>>,
 
-    children_model_changed: Changed,
+    children_model_changed: Computed<()>,
     interactions: Computed<InteractSet>,
 
     border_color: Option<Color>,
@@ -59,7 +59,7 @@ impl<A> Div<A> {
                 cross_justify: Justify::Min
             }),
             children: Vec::new(),
-            children_model_changed: Changed::untracked(true),
+            children_model_changed: Computed::new(),
             interactions: Computed::new(),
             border_color: Some(Color::BLACK),
             background_color: None
@@ -97,30 +97,29 @@ impl<A> Widget<A> for Div<A> {
         }
     }
 
-    fn update_model(&mut self, model: &mut A) -> OnChangeToken {
-        if self.children_model_changed.is_changed() {
-            self.children_model_changed = Changed::any_changed(self.children
-                .iter_mut()
-                .map(|child| child.update_model(model)));
-        }
-        self.children_model_changed.token()
+    fn update_model(&mut self, model: &mut A) -> Trigger {
+        self.children_model_changed.maybe_update(|_| {
+            for child in self.children.iter_mut() {
+                child.update_model(model).track();
+            }
+        });
+        self.children_model_changed.as_read_signal().to_trigger()
     }
 
     fn compute_layout(&mut self, input: LayoutInput) -> ComputedLayout {
         self.layout_cache.compute_layout_with_children(input, &mut self.children)
     }
 
-    fn interactions(&mut self, _layout: &Layout) -> (OnChangeToken, InteractSet) {
+    fn interactions(&mut self, _layout: &Layout) -> ReadSignal<InteractSet> {
         self.interactions.maybe_update(|_| {
             let mut set = InteractSet::default();
             for child in self.children.iter_mut() {
-                let (token, child_set) = child.interactions();
-                token.notify_read();
-                set = set | child_set;
+                let child_set = child.interactions();
+                set = set | *child_set.get();
             }
             set
         });
-        (self.interactions.token(), self.interactions.get_untracked().clone())
+        self.interactions.as_read_signal()
     }
 
     fn draw(&mut self, context: &mut RenderContext, layout: &Layout) {

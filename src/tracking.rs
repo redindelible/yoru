@@ -2,175 +2,282 @@ use std::cell::{Cell, RefCell};
 use std::rc::{Rc, Weak};
 
 
-struct TrackedInner {
-    dirty: Cell<bool>,
-    parent: RefCell<Option<Weak<TrackedInner>>>
+struct Scope {
+    observers: Rc<ObserverInner>
 }
-
-impl TrackedInner {
-    fn set(&self) {
-        self.dirty.set(true);
-
-        let mut curr = self.parent.borrow().as_ref().and_then(Weak::upgrade);
-        while let Some(tracked) = curr {
-            // todo maybe switch to multiple parents + flood fill approach
-            //   if we maintain the invariant that invalid elements are only dependents of invalid elements
-            //   then we can use the 'dirty' as the 'visited' flag for flood fill
-            tracked.dirty.set(true);
-
-            curr = tracked.parent.borrow().as_ref().and_then(Weak::upgrade);
-        }
-    }
-}
-
 
 thread_local! {
-    static TRACKER: Cell<Option<Rc<TrackedInner>>> = const { Cell::new(None) };
+    static SCOPE: Cell<Option<Scope>> = const { Cell::new(None) };
 }
 
-pub struct Signal<T> {
-    value: T,
-    trackers: RefCell<Vec<Weak<TrackedInner>>>,
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
+enum Dirtiness {
+    Clean,
+    Dirty
 }
 
-impl<T> Signal<T> {
-    pub fn new(value: T) -> Signal<T> {
-        Signal {
-            value,
-            trackers: RefCell::new(vec![])
+impl Dirtiness {
+    fn is_clean(&self) -> bool {
+        *self == Dirtiness::Clean
+    }
+
+    fn is_dirty(&self) -> bool {
+        *self == Dirtiness::Dirty
+    }
+}
+
+struct ObservableInner {
+    dependents: RefCell<Vec<Weak<ObserverInner>>>
+}
+
+impl ObservableInner {
+    fn new() -> ObservableInner {
+        ObservableInner {
+            dependents: RefCell::new(Vec::new())
         }
     }
 
-    pub fn get_untracked(&self) -> &T {
-        &self.value
-    }
-
-    pub fn set_untracked(&mut self, value: T) {
-        self.value = value;
-    }
-
-    pub fn get(&self) -> &T {
-        if let Some(tracker) = TRACKER.take() {
-            self.trackers.borrow_mut().push(Rc::downgrade(&tracker));
-            TRACKER.set(Some(tracker));
-        }
-        &self.value
-    }
-
-    pub fn set(&mut self, value: T) {
-        self.value = value;
-        self.trackers.borrow_mut().retain(|observer| {
-            if let Some(observer) = observer.upgrade() {
-                observer.set();
-                true
-            } else {
-                false
+    fn register(&self) {
+        SCOPE.with(|maybe_scope| {
+            if let Some(scope) = maybe_scope.take() {
+                let observer = Rc::downgrade(&scope.observers);
+                self.dependents.borrow_mut().push(observer);
+                maybe_scope.set(Some(scope));
             }
         });
     }
-}
 
-pub struct OnChangeToken(Weak<TrackedInner>);
+    fn try_register(&self) -> bool {
+        SCOPE.with(|maybe_scope| {
+            let Some(scope) = maybe_scope.take() else { return false; };
+            let observer = Rc::downgrade(&scope.observers);
+            self.dependents.borrow_mut().push(observer);
+            maybe_scope.set(Some(scope));
+            return true;
+        })
+    }
 
-impl OnChangeToken {
-    pub fn notify_read(&self) {
-        if let Some(tracker) = TRACKER.take() {
-            if let Some(this) = self.0.upgrade() {
-                this.parent.borrow_mut().replace(Rc::downgrade(&tracker));
+    pub fn trigger(&self) {
+        let mut to_visit = Vec::new();
+
+        fn mark_and_push_children(to_visit: &mut Vec<Rc<ObserverInner>>, observable: &ObservableInner) {
+            for dependent in observable.dependents.borrow().iter() {
+                if let Some(observer) = dependent.upgrade() {
+                    if observer.is_dirty.get().is_clean() {
+                        observer.is_dirty.set(Dirtiness::Dirty);
+                        to_visit.push(observer);
+                    }
+                }
             }
-            TRACKER.set(Some(tracker));
+        }
+
+        mark_and_push_children(&mut to_visit, self);
+
+        while let Some(next) = to_visit.pop() {
+            mark_and_push_children(&mut to_visit, &next.as_observable);
         }
     }
 }
 
-pub struct Changed(Rc<TrackedInner>);
+struct ObserverInner {
+    as_observable: ObservableInner,
+    is_dirty: Cell<Dirtiness>,
+}
 
-impl Changed {
-    pub fn untracked(starts_dirty: bool) -> Changed {
-        Changed(Rc::new(TrackedInner {
-            dirty: Cell::new(starts_dirty),
-            parent: RefCell::new(None)
-        }))
+impl ObserverInner {
+    fn new(starting: Dirtiness) -> Rc<ObserverInner> {
+        Rc::new(ObserverInner {
+            as_observable: ObservableInner::new(),
+            is_dirty: Cell::new(starting)
+        })
     }
 
-    pub fn run_and_track<T>(f: impl FnOnce() -> T) -> (Changed, T) {
-        let old = TRACKER.replace(Some(Rc::new(TrackedInner {
-            dirty: Cell::new(false),
-            parent: RefCell::new(None)
-        })));
+    fn run_and_track<T>(f: impl FnOnce() -> T) -> (Rc<ObserverInner>, T) {
+        let observer = Rc::new(ObserverInner {
+            as_observable: ObservableInner::new(),
+            is_dirty: Cell::new(Dirtiness::Clean)   // todo make sure the dependents are all clean
+        });
+        let old_scope = SCOPE.replace(Some(Scope { observers: Rc::clone(&observer) }));
         let value = f();
-        let new = TRACKER.replace(old).unwrap();
-        (Changed(new), value)
+        SCOPE.set(old_scope);
+        (observer, value)
     }
 
-    pub fn any_changed(dependencies: impl IntoIterator<Item=OnChangeToken>) -> Changed {
-        let this = Changed(Rc::new(TrackedInner {
-            dirty: Cell::new(false),
-            parent: RefCell::new(None)
-        }));
+    fn is_dirty(&self) -> bool {
+        self.is_dirty.get().is_dirty()
+    }
 
-        for dependency in dependencies {
-            if let Some(dependency) = Weak::upgrade(&dependency.0) {
-                dependency.parent.replace(Some(Rc::downgrade(&this.0)));
-            }
+    fn mark_dirty(&self) {
+        let old_value = self.is_dirty.replace(Dirtiness::Dirty);
+        if old_value.is_clean() {
+            self.as_observable.trigger();
         }
-
-        this
-    }
-
-    // pub fn add_dependency(&mut self, dependency: OnChangeToken) {
-    //
-    // }
-
-    pub fn token(&self) -> OnChangeToken {
-        OnChangeToken(Rc::downgrade(&self.0))
-    }
-
-    pub fn is_changed(&self) -> bool {
-        self.0.dirty.get()
     }
 }
 
 
-pub struct Computed<V> {
-    value: V,
-    changed: Changed
+pub trait ReadableSignal<T> {
+    fn as_read_signal(&self) -> ReadSignal<'_, T>;
+
+    fn get_untracked(&self) -> &T;
+
+    fn get(&self) -> &T;
 }
 
-impl<V> Computed<V> {
-    pub fn new_with_initial(initial: V) -> Computed<V> {
-        Computed {
-            value: initial,
-            changed: Changed::untracked(true)
+pub struct ReadSignal<'a, T> {
+    as_observable: Option<&'a ObservableInner>,
+    value: &'a T
+}
+
+impl<'a, T> ReadSignal<'a, T> {
+    pub fn from_value(value: &'a T) -> ReadSignal<'a, T> {
+        ReadSignal {
+            as_observable: None,
+            value
         }
     }
 
-    pub fn token(&self) -> OnChangeToken {
-        self.changed.token()
+    pub fn to_trigger(self) -> Trigger<'a> {
+        Trigger {
+            inner: self.as_observable,
+        }
+    }
+}
+
+impl<'a, T> Clone for ReadSignal<'a, T> {
+    fn clone(&self) -> Self {
+        ReadSignal { as_observable: self.as_observable, value: self.value }
+    }
+}
+
+impl<'a, T> Copy for ReadSignal<'a, T> { }
+
+impl<'a, T> ReadableSignal<T> for ReadSignal<'a, T> {
+    fn as_read_signal(&self) -> ReadSignal<'_, T> {
+        *self
     }
 
-    pub fn get_untracked(&self) -> &V {
+    fn get_untracked(&self) -> &T {
+        self.value
+    }
+
+    fn get(&self) -> &T {
+        if let Some(observable) = self.as_observable {
+            observable.register();
+        }
+        self.value
+    }
+}
+
+#[must_use]
+#[derive(Copy, Clone)]
+pub struct Trigger<'a> {
+    inner: Option<&'a ObservableInner>
+}
+
+impl<'a> Trigger<'a> {
+    pub fn track(&self) {
+        if let Some(inner) = self.inner {
+            inner.register()
+        }
+    }
+}
+
+impl<'a> ReadableSignal<()> for Trigger<'a> {
+    fn as_read_signal(&self) -> ReadSignal<'_, ()> {
+        ReadSignal {
+            as_observable: self.inner,
+            value: &()
+        }
+    }
+
+    fn get_untracked(&self) -> &() {
+        &()
+    }
+
+    fn get(&self) -> &() {
+        self.track();
+        &()
+    }
+}
+
+
+
+struct SignalInner<T> {
+    as_observable: ObservableInner,
+    value: T,
+}
+
+impl<T> SignalInner<T> {
+    fn new(value: T) -> SignalInner<T> {
+        SignalInner {
+            as_observable: ObservableInner::new(),
+            value
+        }
+    }
+
+    fn set_untracked(&mut self, value: T) {
+        self.value = value;
+    }
+
+    fn set(&mut self, value: T) {
+        self.as_observable.trigger();
+        self.set_untracked(value);
+    }
+}
+
+impl<T> ReadableSignal<T> for SignalInner<T> {
+    fn as_read_signal(&self) -> ReadSignal<'_, T> {
+        ReadSignal { as_observable: Some(&self.as_observable), value: &self.value }
+    }
+
+    fn get_untracked(&self) -> &T {
         &self.value
     }
 
-    pub fn is_dirty(&self) -> bool {
-        self.changed.is_changed()
+    fn get(&self) -> &T {
+        self.as_observable.register();
+        &self.value
     }
+}
 
-    pub fn invalidate(&self) {
-        self.changed.0.set();
-    }
+pub struct RwSignal<T> {
+    inner: SignalInner<T>
+}
 
-    pub fn maybe_update(&mut self, f: impl FnOnce(&V) -> V) -> Option<(V, &V)> {
-        if self.changed.is_changed() {
-            let (changed, value) = Changed::run_and_track(|| f(&self.value));
-            let old_value = std::mem::replace(&mut self.value, value);
-            self.changed = changed;
-            Some((old_value, &self.value))
-        } else {
-            None
+impl<T> RwSignal<T> {
+    pub fn new(value: T) -> RwSignal<T> {
+        RwSignal {
+            inner: SignalInner::new(value)
         }
     }
+
+    pub fn set_untracked(&mut self, value: T) {
+        self.inner.set_untracked(value);
+    }
+
+    pub fn set(&mut self, value: T) {
+        self.inner.set(value);
+    }
+}
+
+impl<T> ReadableSignal<T> for RwSignal<T> {
+    fn as_read_signal(&self) -> ReadSignal<'_, T> {
+        self.inner.as_read_signal()
+    }
+
+    fn get_untracked(&self) -> &T {
+        self.inner.get_untracked()
+    }
+
+    fn get(&self) -> &T {
+        self.inner.get()
+    }
+}
+
+pub struct Computed<V> {
+    as_observer: Rc<ObserverInner>,
+    value: V,
 }
 
 impl<V: Default> Computed<V> {
@@ -179,34 +286,27 @@ impl<V: Default> Computed<V> {
     }
 }
 
-pub struct Derived<A, V> {
-    value: V,
-    changed: Changed,
-    compute: Box<dyn Fn(&mut A) -> V>
-}
-
-impl<A, V> Derived<A, V> {
-    pub fn new_with_initial(initial: V, compute: impl (Fn(&mut A) -> V) + 'static) -> Derived<A, V> {
-        Derived {
+impl<V> Computed<V> {
+    pub fn new_with_initial(initial: V) -> Computed<V> {
+        Computed {
+            as_observer: ObserverInner::new(Dirtiness::Dirty),
             value: initial,
-            changed: Changed::untracked(true),
-            compute: Box::new(compute)
         }
     }
 
-    pub fn get_uncached(&self) -> &V {
-        &self.value
+    pub fn is_dirty(&self) -> bool {
+        self.as_observer.is_dirty()
     }
 
-    pub fn token(&self) -> OnChangeToken {
-        self.changed.token()
+    pub fn invalidate(&self) {
+        self.as_observer.mark_dirty();
     }
 
-    pub fn maybe_update(&mut self, model: &mut A) -> Option<(V, &V)> {
-        if self.changed.is_changed() {
-            let (changed, value) = Changed::run_and_track(|| (self.compute)(model));
+    pub fn maybe_update(&mut self, f: impl FnOnce(&V) -> V) -> Option<(V, &V)> {
+        if self.as_observer.is_dirty() {
+            let (observer, value) = ObserverInner::run_and_track(|| f(&self.value));
             let old_value = std::mem::replace(&mut self.value, value);
-            self.changed = changed;
+            self.as_observer = observer;
             Some((old_value, &self.value))
         } else {
             None
@@ -214,12 +314,65 @@ impl<A, V> Derived<A, V> {
     }
 }
 
+impl<T> ReadableSignal<T> for Computed<T> {
+    fn as_read_signal(&self) -> ReadSignal<'_, T> {
+        ReadSignal { as_observable: Some(&self.as_observer.as_observable), value: &self.value }
+    }
+
+    fn get_untracked(&self) -> &T {
+        &self.value
+    }
+
+    fn get(&self) -> &T {
+        self.as_observer.as_observable.register();
+        self.get_untracked()
+    }
+}
+
+pub struct Derived<A, V> {
+    as_observer: Rc<ObserverInner>,
+    value: V,
+    compute: Box<dyn Fn(&mut A) -> V>
+}
+
 impl<A, V> Derived<A, V> where V: Default {
     pub fn new(compute: impl (Fn(&mut A) -> V) + 'static) -> Derived<A, V> {
+        Derived::new_with_initial(V::default(), compute)
+    }
+}
+
+impl<A, V> Derived<A, V> {
+    pub fn new_with_initial(initial: V, compute: impl (Fn(&mut A) -> V) + 'static) -> Derived<A, V> {
         Derived {
-            value: V::default(),
-            changed: Changed::untracked(true),
+            as_observer: ObserverInner::new(Dirtiness::Dirty),
+            value: initial,
             compute: Box::new(compute)
         }
+    }
+
+    pub fn maybe_update(&mut self, model: &mut A) -> Option<(V, &V)> {
+        if self.as_observer.is_dirty() {
+            let (observer, value) = ObserverInner::run_and_track(|| (self.compute)(model));
+            let old_value = std::mem::replace(&mut self.value, value);
+            self.as_observer = observer;
+            Some((old_value, &self.value))
+        } else {
+            None
+        }
+    }
+}
+
+impl<A, T> ReadableSignal<T> for Derived<A, T> {
+    fn as_read_signal(&self) -> ReadSignal<'_, T> {
+        ReadSignal { as_observable: Some(&self.as_observer.as_observable), value: &self.value }
+    }
+
+    fn get_untracked(&self) -> &T {
+        &self.value
+    }
+
+    fn get(&self) -> &T {
+        self.as_observer.as_observable.register();
+        &self.value
     }
 }

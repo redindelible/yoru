@@ -1,19 +1,19 @@
 use std::convert::identity;
-use crate::{Changed, math, RenderContext, Widget};
+use crate::{math, RenderContext, Widget};
 use crate::interact::{Interaction, InteractSet};
 use crate::layout::{BoxLayout, LayoutInput, ComputedLayout};
-use crate::tracking::OnChangeToken;
+use crate::tracking::{Computed, ReadSignal, Trigger};
 
 
-pub struct Root<A>(Element<A>, Changed);
+pub struct Root<A>(Element<A>, Computed<()>);
 
 impl<A> Root<A> {
     pub fn new(element: Element<A>) -> Root<A> {
-        Root(element, Changed::untracked(true))
+        Root(element, Computed::new())
     }
 
     pub fn needs_redraw(&self) -> bool {
-        self.1.is_changed()
+        self.1.is_dirty()
     }
 
     pub fn handle_interaction(&mut self, interaction: &Interaction, model: &mut A) {
@@ -21,7 +21,9 @@ impl<A> Root<A> {
     }
 
     pub fn update_model(&mut self, model: &mut A) {
-        self.1 = Changed::any_changed([self.0.update_model(model)]);
+        self.1.maybe_update(|_| {
+            self.0.update_model(model).track()
+        });
     }
 
     pub fn compute_layout(&mut self, viewport: math::Size, scale_factor: f32) {
@@ -59,7 +61,8 @@ impl<A> Element<A> {
         self.0.layout_cache_mut()
     }
 
-    pub fn update_model(&mut self, model: &mut A) -> OnChangeToken {
+    #[must_use]
+    pub fn update_model(&mut self, model: &mut A) -> Trigger {
         self.0.update_model(model)
     }
 
@@ -71,7 +74,7 @@ impl<A> Element<A> {
         self.0.compute_layout(input)
     }
 
-    pub fn interactions(&mut self) -> (OnChangeToken, InteractSet) {
+    pub fn interactions(&mut self) -> ReadSignal<InteractSet> {
         let layout = self.0.layout_cache().get_final_layout().unwrap_or_else(identity);
         self.0.interactions(&layout)
     }

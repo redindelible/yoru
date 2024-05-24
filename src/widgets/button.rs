@@ -5,7 +5,7 @@ use crate::layout::{BoxLayout, ComputedLayout, Layout, LayoutInput};
 use crate::{Element, Label, RenderContext};
 use crate::interact::{Interaction, InteractSet};
 use crate::math::{Axis};
-use crate::tracking::{Computed, OnChangeToken};
+use crate::tracking::{Computed, ReadableSignal, ReadSignal, Trigger};
 use crate::widgets::div::to_tiny_skia_path;
 use crate::widgets::Widget;
 
@@ -69,7 +69,7 @@ impl<A> Widget<A> for Button<A> {
         }
     }
 
-    fn update_model(&mut self, model: &mut A) -> OnChangeToken {
+    fn update_model(&mut self, model: &mut A) -> Trigger {
         self.inner.update_model(model)
     }
 
@@ -77,17 +77,16 @@ impl<A> Widget<A> for Button<A> {
         self.layout_cache.compute_layout_with_children(input, std::slice::from_mut(&mut self.inner))
     }
 
-    fn interactions(&mut self, layout: &Layout) -> (OnChangeToken, InteractSet) {
+    fn interactions(&mut self, layout: &Layout) -> ReadSignal<InteractSet> {
         self.interactions.maybe_update(|_| {
-            let (token, set) = self.inner.interactions();
-            token.notify_read();
+            let set = self.inner.interactions();
             let this_set = InteractSet {
                 click: true,
                 click_area: layout.border_box
             };
-            this_set | set
+            this_set | *set.get()
         });
-        (self.interactions.token(), *self.interactions.get_untracked())
+        self.interactions.as_read_signal()
     }
 
     fn draw(&mut self, context: &mut RenderContext, layout: &Layout) {

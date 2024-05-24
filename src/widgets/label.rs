@@ -1,9 +1,9 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
-use crate::{BoxLayout, Changed, Color, ComputedLayout, Direction, Element, Justify, Layout, LayoutInput, LayoutStyle, math, RenderContext, Sizing};
+use crate::{BoxLayout, Color, ComputedLayout, Direction, Element, Justify, Layout, LayoutInput, LayoutStyle, math, RenderContext, Sizing};
 use crate::interact::{Interaction, InteractSet};
 use crate::math::Axis;
-use crate::tracking::{Derived, OnChangeToken};
+use crate::tracking::{Derived, ReadableSignal, ReadSignal, Trigger};
 use crate::widgets::Widget;
 
 thread_local! {
@@ -129,7 +129,7 @@ impl<A> Widget<A> for Label<A> {
 
     }
 
-    fn update_model(&mut self, model: &mut A) -> OnChangeToken {
+    fn update_model(&mut self, model: &mut A) -> Trigger {
         if let Some((_, new_value)) = self.text.maybe_update(model) {
             FONTS.with_borrow_mut(|fonts| {
                 self.buffer.set_text(fonts, new_value, cosmic_text::Attrs::new(), cosmic_text::Shaping::Advanced);
@@ -138,7 +138,7 @@ impl<A> Widget<A> for Label<A> {
 
             self.layout_cache.invalidate();
         }
-        self.text.token()
+        self.text.as_read_signal().to_trigger()
     }
 
     fn compute_layout(&mut self, input: LayoutInput) -> ComputedLayout {
@@ -156,8 +156,8 @@ impl<A> Widget<A> for Label<A> {
         })
     }
 
-    fn interactions(&mut self, _layout: &Layout) -> (OnChangeToken, InteractSet) {
-        (Changed::untracked(false).token(), InteractSet::default())
+    fn interactions(&mut self, _layout: &Layout) -> ReadSignal<InteractSet> {
+        ReadSignal::from_value(&InteractSet::EMPTY)
     }
 
     fn draw(&mut self, context: &mut RenderContext, layout: &Layout) {

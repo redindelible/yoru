@@ -18,6 +18,15 @@ pub struct InteractSet {
 }
 
 impl InteractSet {
+    pub const EMPTY: InteractSet = InteractSet::empty();
+
+    pub const fn empty() -> InteractSet {
+        InteractSet {
+            click: false,
+            click_area: bytemuck::zeroed()
+        }
+    }
+
     pub fn accepts(&self, interaction: &Interaction) -> bool {
         match interaction {
             Interaction::Click(point) => {
@@ -29,10 +38,7 @@ impl InteractSet {
 
 impl Default for InteractSet {
     fn default() -> Self {
-        InteractSet {
-            click: false,
-            click_area: math::Rect::zeroed()
-        }
+        InteractSet::empty()
     }
 }
 
