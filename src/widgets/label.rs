@@ -1,9 +1,9 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
-use crate::{BoxLayout, Color, ComputedLayout, Direction, Element, Justify, Layout, LayoutInput, LayoutStyle, math, RenderContext, Sizing};
+use crate::{Color, LayoutCharacteristics, Element, PrelayoutInput, LayoutStyle, math, RenderContext, Sizing, layout, Layout};
 use crate::interact::{Interaction, InteractSet};
-use crate::math::Axis;
-use crate::tracking::{Derived, ReadableSignal, ReadSignal, Trigger};
+use crate::layout::LayoutInput;
+use crate::tracking::{Computed2, Derived, ReadableSignal, RwSignal};
 use crate::widgets::Widget;
 
 thread_local! {
@@ -69,14 +69,16 @@ impl GlyphCache {
 
 
 pub struct Label<A> {
-    layout_cache: BoxLayout<A>,
-
+    style: LayoutStyle,
     font_size: f32,
 
     text: Derived<A, String>,
 
-    sizing_buffer: cosmic_text::Buffer,
-    buffer: cosmic_text::Buffer
+    sizing_buffer: RwSignal<cosmic_text::Buffer>,
+    buffer: RefCell<cosmic_text::Buffer>,
+
+    prelayout_cache: Computed2<PrelayoutInput, math::Size>,
+    layout_cache: Computed2<LayoutInput, Layout>
 }
 
 impl<A> Label<A> {
@@ -91,78 +93,83 @@ impl<A> Label<A> {
         });
 
         Label {
-            layout_cache: BoxLayout::new(LayoutStyle {
+            style: LayoutStyle {
                 border_size: 0.0,
                 padding: 0.0.into(),
                 margin: 0.0.into(),
                 width: Sizing::Fit,
-                height: Sizing::Fit,
-                // todo make a ContainerLayoutCache so that leaf elements don't need this?
-                main_axis: Axis::Vertical,
-                main_direction: Direction::Positive,
-                main_justify: Justify::Min,
-                cross_justify: Justify::Min
-            }),
-
+                height: Sizing::Fit
+            },
             font_size,
-
             text: Derived::new(compute),
-
-            sizing_buffer,
-            buffer: FONTS.with_borrow_mut(|fonts| {
+            sizing_buffer: RwSignal::new(sizing_buffer),
+            buffer: RefCell::new(FONTS.with_borrow_mut(|fonts| {
                 cosmic_text::Buffer::new(fonts, default_metrics)
-            })
+            })),
+
+            prelayout_cache: Computed2::new(),
+            layout_cache: Computed2::new()
         }
     }
 }
 
 impl<A> Widget<A> for Label<A> {
-    fn layout_cache(&self) -> &BoxLayout<A> {
-        &self.layout_cache
+    fn update(&self, model: &mut A) {
+        if self.text.maybe_update(model) {
+            let new_value = self.text.get();
+            FONTS.with_borrow_mut(|fonts| {
+                self.buffer.borrow_mut().set_text(fonts, &new_value, cosmic_text::Attrs::new(), cosmic_text::Shaping::Advanced);
+                self.sizing_buffer.update(|buffer| buffer.set_text(fonts, &new_value, cosmic_text::Attrs::new(), cosmic_text::Shaping::Advanced));
+            });
+        }
+        self.text.track()
     }
 
-    fn layout_cache_mut(&mut self) -> &mut BoxLayout<A> {
-        &mut self.layout_cache
+    fn prelayout(&self, input: PrelayoutInput) -> LayoutCharacteristics {
+        self.prelayout_cache.maybe_update(input, |&input| {
+            self.text.track();
+            let characteristics = layout::leaf::do_prelayout(&self.style, input, |available, scale_factor| {
+                FONTS.with_borrow_mut(|fonts| {
+                    self.sizing_buffer.update(|buffer| buffer.set_metrics_and_size(
+                        fonts,
+                        cosmic_text::Metrics::new(self.font_size * scale_factor, self.font_size * scale_factor),
+                        available.width(), available.height()
+                    ));
+                    let min_size = self.sizing_buffer.with(|buffer| {
+                        let max_width = buffer.layout_runs().map(|run| run.line_w).max_by(f32::total_cmp).unwrap_or(0.0);
+                        let total_height = buffer.layout_runs().len() as f32 * buffer.metrics().line_height;
+                        math::Size::new(max_width, total_height)
+                    });
+                    min_size
+                })
+            });
+            characteristics.min_size
+        });
+
+        LayoutCharacteristics { layout_style: &self.style, min_size: self.prelayout_cache.get() }
+    }
+
+    fn layout(&self, input: LayoutInput) {
+        self.layout_cache.maybe_update(input, |&input| {
+            self.prelayout_cache.track();
+            layout::leaf::do_layout(&self.style, input);
+            Layout::from_layout_input(&self.style, input)
+        });
+        self.layout_cache.track();
+    }
+
+    fn interactions(&self) -> InteractSet {
+        InteractSet::empty()
     }
 
     fn handle_interaction(&mut self, _interaction: &Interaction, _model: &mut A) {
 
     }
 
-    fn update_model(&mut self, model: &mut A) -> Trigger {
-        if let Some((_, new_value)) = self.text.maybe_update(model) {
-            FONTS.with_borrow_mut(|fonts| {
-                self.buffer.set_text(fonts, new_value, cosmic_text::Attrs::new(), cosmic_text::Shaping::Advanced);
-                self.sizing_buffer.set_text(fonts, new_value, cosmic_text::Attrs::new(), cosmic_text::Shaping::Advanced);
-            });
-
-            self.layout_cache.invalidate();
-        }
-        self.text.as_read_signal().to_trigger()
-    }
-
-    fn compute_layout(&mut self, input: LayoutInput) -> ComputedLayout {
-        self.layout_cache.compute_layout_leaf(input, |available_size, scale_factor| {
-            FONTS.with_borrow_mut(|fonts| {
-                self.sizing_buffer.set_metrics_and_size(
-                    fonts,
-                    cosmic_text::Metrics::new(self.font_size * scale_factor, self.font_size * scale_factor),
-                    available_size.width(), available_size.height()
-                );
-                let max_width = self.sizing_buffer.layout_runs().map(|run| run.line_w).max_by(f32::total_cmp).unwrap_or(0.0);
-                let total_height = self.sizing_buffer.layout_runs().len() as f32 * self.sizing_buffer.metrics().line_height;
-                math::Size::new(max_width, total_height)
-            })
-        })
-    }
-
-    fn interactions(&mut self, _layout: &Layout) -> ReadSignal<InteractSet> {
-        ReadSignal::from_value(&InteractSet::EMPTY)
-    }
-
-    fn draw(&mut self, context: &mut RenderContext, layout: &Layout) {
+    fn draw(&mut self, context: &mut RenderContext) {
+        let layout = self.layout_cache.get_untracked();
         FONTS.with_borrow_mut(|fonts| {
-            self.buffer.set_metrics_and_size(
+            self.buffer.borrow_mut().set_metrics_and_size(
                 fonts,
                 cosmic_text::Metrics::new(self.font_size * layout.scale_factor, self.font_size * layout.scale_factor),
                 layout.content_box.width(), layout.content_box.height()
@@ -173,7 +180,7 @@ impl<A> Widget<A> for Label<A> {
                 paint.set_color(Color::BLACK.into());
                 let content_top_left = layout.content_box.top_left();
 
-                for run in self.buffer.layout_runs() {
+                for run in self.buffer.borrow().layout_runs() {
                     for glyph in run.glyphs {
                         let physical_glyph = glyph.physical((content_top_left.x, content_top_left.y), 1.0);
 

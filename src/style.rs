@@ -78,17 +78,22 @@ pub struct LayoutStyle {
     pub margin: math::SizeRect,
 
     pub width: Sizing,
-    pub height: Sizing,
-
-    pub main_axis: math::Axis,
-    pub main_direction: Direction,
-    pub main_justify: Justify,
-    pub cross_justify: Justify
+    pub height: Sizing
 }
-
 
 impl LayoutStyle {
     pub fn spacing_size(&self) -> math::SizeRect {
         self.margin + math::SizeRect::from_border(self.border_size) + self.padding
     }
+}
+
+
+#[derive(Debug, Copy, Clone)]
+pub struct ContainerLayoutStyle {
+    pub layout_style: LayoutStyle,
+
+    pub main_axis: math::Axis,
+    pub main_direction: Direction,
+    pub main_justify: Justify,
+    pub cross_justify: Justify
 }

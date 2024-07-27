@@ -1,7 +1,9 @@
-use crate::{BoxLayout, Color, ComputedLayout, Direction, Element, Justify, Layout, LayoutInput, LayoutStyle, RenderContext, Sizing};
+use crate::{Element, layout, Layout, math, RenderContext};
 use crate::interact::{Interaction, InteractSet};
+use crate::layout::{PrelayoutInput, LayoutCharacteristics, LayoutInput};
 use crate::math::Axis;
-use crate::tracking::{Computed, Derived, ReadableSignal, ReadSignal, Trigger};
+use crate::style::{LayoutStyle, ContainerLayoutStyle, Justify, Sizing, Direction, Color};
+use crate::tracking::{Computed, Computed2, ReadableSignal, TrackedVec};
 use crate::widgets::Widget;
 
 
@@ -34,11 +36,13 @@ pub fn to_tiny_skia_path<S: kurbo::Shape>(shape: S) -> tiny_skia::Path {
 
 
 pub struct Div<A> {
-    layout_cache: BoxLayout<A>,
-    children: Vec<Element<A>>,
+    style: ContainerLayoutStyle,
+    children: TrackedVec<Element<A>>,
 
-    children_model_changed: Computed<()>,
-    interactions: Computed<InteractSet>,
+    update_cache: Computed<()>,
+    prelayout_cache: Computed2<PrelayoutInput, math::Size>,
+    layout_cache: Computed2<LayoutInput, Layout>,
+    interactions_cache: Computed<InteractSet>,
 
     border_color: Option<Color>,
     background_color: Option<Color>,
@@ -47,31 +51,43 @@ pub struct Div<A> {
 impl<A> Div<A> {
     pub fn new() -> Div<A> {
         Div {
-            layout_cache: BoxLayout::new(LayoutStyle {
-                border_size: 2.0,
-                padding: 2.0.into(),
-                margin: 1.0.into(),
-                width: Sizing::Fit,
-                height: Sizing::Fit,
+            style: ContainerLayoutStyle {
+                layout_style: LayoutStyle {
+                    border_size: 2.0,
+                    padding: 2.0.into(),
+                    margin: 1.0.into(),
+                    width: Sizing::Fit,
+                    height: Sizing::Fit
+                },
                 main_axis: Axis::Vertical,
                 main_direction: Direction::Positive,
                 main_justify: Justify::Min,
                 cross_justify: Justify::Min
-            }),
-            children: Vec::new(),
-            children_model_changed: Computed::new(),
-            interactions: Computed::new(),
+            },
+            children: TrackedVec::new(),
+            update_cache: Computed::new(),
+            prelayout_cache: Computed2::new(),
+            layout_cache: Computed2::new(),
+            interactions_cache: Computed::new(),
             border_color: Some(Color::BLACK),
             background_color: None
         }
     }
 
     pub fn add_child(&mut self, element: impl Into<Element<A>>) {
-        let element = element.into();
-        element.props().set_parent(self.layout_cache.as_parent());
-        self.layout_cache.invalidate();
-        self.interactions.invalidate();
-        self.children.push(element);
+        self.children.push(element.into());
+    }
+
+    pub fn set_width(&mut self, width: Sizing) {
+        self.style.layout_style.width = width;
+    }
+
+    pub fn set_height(&mut self, height: Sizing) {
+        self.style.layout_style.height = height;
+    }
+
+    pub fn set_margin(&mut self, margin: math::SizeRect) {
+        self.style.layout_style.margin = margin;
     }
 
     pub fn set_background_color(&mut self, color: impl Into<Option<Color>>) {
@@ -86,44 +102,69 @@ impl<A: 'static> From<Div<A>> for Element<A> {
 }
 
 impl<A> Widget<A> for Div<A> {
-    fn layout_cache(&self) -> &BoxLayout<A> { &self.layout_cache }
-    fn layout_cache_mut(&mut self) -> &mut BoxLayout<A> { &mut self.layout_cache }
+    fn update(&self, model: &mut A) {
+        self.update_cache.maybe_update(|| {
+            self.children.with(|children| {
+                for child in children {
+                    child.update(model);
+                }
+            });
+        });
+        self.update_cache.track();
+    }
 
-    fn handle_interaction(&mut self, interaction: &Interaction, model: &mut A) {
-        if self.interactions.get_untracked().accepts(interaction) {
-            for child in self.children.iter_mut() {
-                child.handle_interaction(interaction, model)
-            }
+    fn prelayout(&self, input: PrelayoutInput) -> LayoutCharacteristics {
+        self.prelayout_cache.maybe_update(input, |&input| {
+            let characteristics = self.children.with(|items| layout::container::do_prelayout(&self.style, input, items));
+            characteristics.min_size
+        });
+        LayoutCharacteristics {
+            layout_style: &self.style.layout_style,
+            min_size: self.prelayout_cache.get_untracked()
         }
     }
 
-    fn update_model(&mut self, model: &mut A) -> Trigger {
-        self.children_model_changed.maybe_update(|_| {
-            for child in self.children.iter_mut() {
-                child.update_model(model).track();
-            }
+    fn layout(&self, input: LayoutInput) {
+        self.layout_cache.maybe_update(input, |&input| {
+            self.prelayout_cache.track();
+            self.children.with(|children| {
+                let children_layouts = layout::container::do_layout(&self.style, input, children);
+                for (child, child_layout) in children.iter().zip(children_layouts) {
+                    child.layout(child_layout);
+                }
+            });
+            Layout::from_layout_input(&self.style.layout_style, input)
         });
-        self.children_model_changed.as_read_signal().to_trigger()
+
+        self.layout_cache.track()
     }
 
-    fn compute_layout(&mut self, input: LayoutInput) -> ComputedLayout {
-        self.layout_cache.compute_layout_with_children(input, &mut self.children)
-    }
-
-    fn interactions(&mut self, _layout: &Layout) -> ReadSignal<InteractSet> {
-        self.interactions.maybe_update(|_| {
+    fn interactions(&self) -> InteractSet {
+        self.interactions_cache.maybe_update(|| {
             let mut set = InteractSet::default();
-            for child in self.children.iter_mut() {
-                let child_set = child.interactions();
-                set = set | *child_set.get();
-            }
+            self.children.with(|children| {
+                for child in children {
+                    set = set | child.interactions();
+                }
+            });
             set
         });
-        self.interactions.as_read_signal()
+        self.interactions_cache.get()
     }
 
-    fn draw(&mut self, context: &mut RenderContext, layout: &Layout) {
-        let border_size = self.layout_cache.attrs().border_size * layout.scale_factor;
+    fn handle_interaction(&mut self, interaction: &Interaction, model: &mut A) {
+        if self.interactions_cache.get_untracked().accepts(interaction) {
+            self.children.with_mut_untracked(|children| {
+                for child in children.iter_mut() {
+                    child.handle_interaction(interaction, model)
+                }
+            });
+        }
+    }
+
+    fn draw(&mut self, context: &mut RenderContext) {
+        let layout = self.layout_cache.get_untracked();
+        let border_size = self.style.layout_style.border_size * layout.scale_factor;
         if let Some(border_color) = self.border_color {
             if border_size > 0.0 {
                 let border_box = layout.half_border_box;
@@ -144,9 +185,11 @@ impl<A> Widget<A> for Div<A> {
             context.canvas.fill_rect(padding_box.into(), &paint, tiny_skia::Transform::identity(), None);
         }
 
-        for child in &mut self.children {
-            child.draw(context);
-        }
+        self.children.with_mut_untracked(|children| {
+            for child in children {
+                child.draw(context);
+            }
+        })
     }
 }
 
@@ -156,34 +199,23 @@ macro_rules! div {
     (width=$e:expr $(, $($rest:tt)*)?) => {{
         use $crate::Widget;
         let mut div = div!($( $($rest)* )?);
-        div.layout_cache_mut().set_width($e);
+        div.set_width(($e).into());
         div
     }};
     (height=$e:expr $(, $($rest:tt)*)?) => {{
         use $crate::Widget;
         let mut div = div!($( $($rest)* )?);
-        div.layout_cache_mut().set_height($e);
+        div.set_height(($e).into());
         div
     }};
     (margin=$e:expr $(, $($rest:tt)*)?) => {{
         use $crate::Widget;
         let mut div = div!($( $($rest)* )?);
-        div.layout_cache_mut().set_margin($e);
-        div
-    }};
-    (padding=$e:expr $(, $($rest:tt)*)?) => {{
-        use $crate::Widget;
-        let mut div = div!($( $($rest)* )?);
-        div.layout_cache_mut().set_padding($e);
-        div
-    }};
-    (border=$e:expr $(, $($rest:tt)*)?) => {{
-        use $crate::Widget;
-        let mut div = div!($( $($rest)* )?);
-        div.props_mut().set_border($e);
+        div.set_margin(($e).into());
         div
     }};
     (background=$e:expr $(, $($rest:tt)*)?) => {{
+        use $crate::Widget;
         let mut div = div!($( $($rest)* )?);
         div.set_background_color($e);
         div

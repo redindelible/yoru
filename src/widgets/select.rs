@@ -3,12 +3,16 @@ use std::ops::IndexMut;
 use crate::{Widget, RenderContext};
 use crate::element::Element;
 use crate::interact::{Interaction, InteractSet};
-use crate::layout::{BoxLayout, ComputedLayout, Layout, LayoutInput};
-use crate::tracking::{Derived, ReadableSignal, ReadSignal, Trigger};
+use crate::layout::{LayoutCharacteristics, PrelayoutInput, LayoutInput};
+use crate::tracking::{Computed, Computed2, Derived, ReadableSignal};
 
 pub struct Select<A, S, O> {
     selector: Derived<A, S>,
     options: O,
+
+    update_cache: Computed<()>,
+    layout_cache: Computed2<LayoutInput, ()>,
+    interactions: Computed<InteractSet>,
 }
 
 impl<A, S, O> Select<A, S, O> where O: IndexMut<S, Output=Element<A>> + 'static, S: Copy + 'static {
@@ -16,15 +20,11 @@ impl<A, S, O> Select<A, S, O> where O: IndexMut<S, Output=Element<A>> + 'static,
         Select {
             options,
             selector: Derived::new_with_initial(starting, selector),
+
+            update_cache: Computed::new(),
+            layout_cache: Computed2::new(),
+            interactions: Computed::new(),
         }
-    }
-
-    pub fn element(&self) -> &Element<A> {
-        &self.options[*self.selector.get_untracked()]
-    }
-
-    pub fn element_mut(&mut self) -> &mut Element<A> {
-        &mut self.options[*self.selector.get_untracked()]
     }
 }
 
@@ -35,37 +35,36 @@ impl<A: 'static, S, O> From<Select<A, S, O>> for Element<A> where O: IndexMut<S,
 }
 
 impl<A, S, O> Widget<A> for Select<A, S, O> where O: IndexMut<S, Output=Element<A>> + 'static, S: Copy + 'static {
-    fn layout_cache(&self) -> &BoxLayout<A> {
-        self.element().props()
+    fn update(&self, model: &mut A) {
+        self.update_cache.maybe_update(|| {
+            self.selector.maybe_update(model);
+            self.options[self.selector.get_untracked()].update(model);
+        });
+        self.update_cache.track()
     }
 
-    fn layout_cache_mut(&mut self) -> &mut BoxLayout<A> {
-        self.element_mut().props_mut()
+    fn prelayout(&self, input: PrelayoutInput) -> LayoutCharacteristics {
+        // todo cache?
+        self.options[self.selector.get_untracked()].prelayout(input)
+    }
+
+    fn layout(&self, input: LayoutInput) {
+        self.layout_cache.maybe_update(input, |&input| {
+            self.options[self.selector.get()].layout(input);
+        });
+        self.layout_cache.track()
+    }
+
+    fn interactions(&self) -> InteractSet {
+        self.interactions.maybe_update(|| self.options[self.selector.get()].interactions());
+        self.interactions.get()
     }
 
     fn handle_interaction(&mut self, interaction: &Interaction, model: &mut A) {
-        self.element_mut().handle_interaction(interaction, model)
+        self.options[self.selector.get_untracked()].handle_interaction(interaction, model)
     }
 
-    fn update_model(&mut self, model: &mut A) -> Trigger {
-        if let Some((old, new)) = self.selector.maybe_update(model) {
-            if let Some(parent) = self.options[old].props().remove_parent() {
-                self.options[*new].props().set_parent(parent);
-            }
-            self.layout_cache_mut().invalidate();
-        }
-        self.selector.as_read_signal().to_trigger()
-    }
-
-    fn compute_layout(&mut self, input: LayoutInput) -> ComputedLayout {
-        self.element_mut().compute_layout(input)
-    }
-
-    fn interactions(&mut self, _layout: &Layout) -> ReadSignal<InteractSet> {
-        self.element_mut().interactions()
-    }
-
-    fn draw(&mut self, context: &mut RenderContext, _layout: &Layout) {
-        self.element_mut().draw(context)
+    fn draw(&mut self, context: &mut RenderContext) {
+        self.options[self.selector.get_untracked()].draw(context)
     }
 }

@@ -1,4 +1,5 @@
 use std::cell::{Cell, RefCell};
+use std::marker::PhantomData;
 use std::rc::{Rc, Weak};
 
 
@@ -47,16 +48,6 @@ impl ObservableInner {
         });
     }
 
-    fn try_register(&self) -> bool {
-        SCOPE.with(|maybe_scope| {
-            let Some(scope) = maybe_scope.take() else { return false; };
-            let observer = Rc::downgrade(&scope.observers);
-            self.dependents.borrow_mut().push(observer);
-            maybe_scope.set(Some(scope));
-            return true;
-        })
-    }
-
     pub fn trigger(&self) {
         let mut to_visit = Vec::new();
 
@@ -100,6 +91,7 @@ impl ObserverInner {
         let old_scope = SCOPE.replace(Some(Scope { observers: Rc::clone(&observer) }));
         let value = f();
         SCOPE.set(old_scope);
+        observer.is_dirty.set(Dirtiness::Clean);
         (observer, value)
     }
 
@@ -115,129 +107,66 @@ impl ObserverInner {
     }
 }
 
-
 pub trait ReadableSignal<T> {
-    fn as_read_signal(&self) -> ReadSignal<'_, T>;
-
-    fn get_untracked(&self) -> &T;
-
-    fn get(&self) -> &T;
+    fn get(&self) -> T;
+    fn get_untracked(&self) -> T;
+    fn track(&self);
 }
 
-pub struct ReadSignal<'a, T> {
-    as_observable: Option<&'a ObservableInner>,
-    value: &'a T
+pub trait WritableSignal<T> {
+    fn set_untracked(&self, value: T);
+    fn set(&self, value: T);
+
+    fn update_untracked<O>(&self, f: impl FnOnce(&mut T) -> O) -> O;
+    fn update<O>(&self, f: impl FnOnce(&mut T) -> O) -> O;
 }
-
-impl<'a, T> ReadSignal<'a, T> {
-    pub fn from_value(value: &'a T) -> ReadSignal<'a, T> {
-        ReadSignal {
-            as_observable: None,
-            value
-        }
-    }
-
-    pub fn to_trigger(self) -> Trigger<'a> {
-        Trigger {
-            inner: self.as_observable,
-        }
-    }
-}
-
-impl<'a, T> Clone for ReadSignal<'a, T> {
-    fn clone(&self) -> Self {
-        ReadSignal { as_observable: self.as_observable, value: self.value }
-    }
-}
-
-impl<'a, T> Copy for ReadSignal<'a, T> { }
-
-impl<'a, T> ReadableSignal<T> for ReadSignal<'a, T> {
-    fn as_read_signal(&self) -> ReadSignal<'_, T> {
-        *self
-    }
-
-    fn get_untracked(&self) -> &T {
-        self.value
-    }
-
-    fn get(&self) -> &T {
-        if let Some(observable) = self.as_observable {
-            observable.register();
-        }
-        self.value
-    }
-}
-
-#[must_use]
-#[derive(Copy, Clone)]
-pub struct Trigger<'a> {
-    inner: Option<&'a ObservableInner>
-}
-
-impl<'a> Trigger<'a> {
-    pub fn track(&self) {
-        if let Some(inner) = self.inner {
-            inner.register()
-        }
-    }
-}
-
-impl<'a> ReadableSignal<()> for Trigger<'a> {
-    fn as_read_signal(&self) -> ReadSignal<'_, ()> {
-        ReadSignal {
-            as_observable: self.inner,
-            value: &()
-        }
-    }
-
-    fn get_untracked(&self) -> &() {
-        &()
-    }
-
-    fn get(&self) -> &() {
-        self.track();
-        &()
-    }
-}
-
-
 
 struct SignalInner<T> {
     as_observable: ObservableInner,
-    value: T,
+    value: RefCell<T>,
 }
 
 impl<T> SignalInner<T> {
     fn new(value: T) -> SignalInner<T> {
         SignalInner {
             as_observable: ObservableInner::new(),
-            value
+            value: RefCell::new(value)
         }
     }
-
-    fn set_untracked(&mut self, value: T) {
-        self.value = value;
-    }
-
-    fn set(&mut self, value: T) {
-        self.as_observable.trigger();
-        self.set_untracked(value);
-    }
+    //
+    // fn get_mut(&mut self) -> &mut T {
+    //     self.as_observable.trigger();
+    //     self.as_observable.register();
+    //     &mut self.value
+    // }
+    //
+    // fn get_mut_for_read(&mut self) -> &mut T {
+    //     self.as_observable.register();
+    //     &mut self.value
+    // }
+    //
+    // fn set_untracked(&mut self, value: T) {
+    //     self.value = value;
+    // }
+    //
+    // fn set(&mut self, value: T) {
+    //     self.as_observable.trigger();
+    //     self.set_untracked(value);
+    // }
 }
 
-impl<T> ReadableSignal<T> for SignalInner<T> {
-    fn as_read_signal(&self) -> ReadSignal<'_, T> {
-        ReadSignal { as_observable: Some(&self.as_observable), value: &self.value }
-    }
-
-    fn get_untracked(&self) -> &T {
-        &self.value
-    }
-
-    fn get(&self) -> &T {
+impl<T> ReadableSignal<T> for SignalInner<T> where T: Clone {
+    fn get(&self) -> T {
         self.as_observable.register();
-        &self.value
+        self.value.borrow().clone()
+    }
+
+    fn get_untracked(&self) -> T {
+        self.value.borrow().clone()
+    }
+
+    fn track(&self) {
+        self.as_observable.register();
     }
 }
 
@@ -252,32 +181,51 @@ impl<T> RwSignal<T> {
         }
     }
 
-    pub fn set_untracked(&mut self, value: T) {
-        self.inner.set_untracked(value);
+    pub fn with<O>(&self, f: impl FnOnce(&T) -> O) -> O {
+        let value = f(&*self.inner.value.borrow());
+        self.inner.as_observable.register();
+        value
     }
 
-    pub fn set(&mut self, value: T) {
-        self.inner.set(value);
+    pub fn update(&self, f: impl FnOnce(&mut T)) {
+        f(&mut *self.inner.value.borrow_mut());
+        self.inner.as_observable.trigger();
     }
+
+    // pub fn get_mut(&mut self) -> &mut T {
+    //     self.inner.get_mut()
+    // }
+    //
+    // pub fn get_mut_for_read(&mut self) -> &mut T {
+    //     self.inner.get_mut_for_read()
+    // }
+    //
+    // pub fn set_untracked(&mut self, value: T) {
+    //     self.inner.set_untracked(value);
+    // }
+    //
+    // pub fn set(&mut self, value: T) {
+    //     self.inner.set(value);
+    // }
 }
 
-impl<T> ReadableSignal<T> for RwSignal<T> {
-    fn as_read_signal(&self) -> ReadSignal<'_, T> {
-        self.inner.as_read_signal()
+impl<T> ReadableSignal<T> for RwSignal<T> where T: Clone {
+    fn get(&self) -> T {
+        self.inner.get()
     }
 
-    fn get_untracked(&self) -> &T {
+    fn get_untracked(&self) -> T {
         self.inner.get_untracked()
     }
 
-    fn get(&self) -> &T {
-        self.inner.get()
+    fn track(&self) {
+        self.inner.as_observable.register();
     }
 }
 
 pub struct Computed<V> {
-    as_observer: Rc<ObserverInner>,
-    value: V,
+    as_observer: RefCell<Rc<ObserverInner>>,
+    value: RefCell<V>,
 }
 
 impl<V: Default> Computed<V> {
@@ -289,49 +237,52 @@ impl<V: Default> Computed<V> {
 impl<V> Computed<V> {
     pub fn new_with_initial(initial: V) -> Computed<V> {
         Computed {
-            as_observer: ObserverInner::new(Dirtiness::Dirty),
-            value: initial,
+            as_observer: RefCell::new(ObserverInner::new(Dirtiness::Dirty)),
+            value: RefCell::new(initial),
         }
     }
 
     pub fn is_dirty(&self) -> bool {
-        self.as_observer.is_dirty()
+        self.as_observer.borrow().is_dirty()
     }
 
     pub fn invalidate(&self) {
-        self.as_observer.mark_dirty();
+        self.as_observer.borrow().mark_dirty();
     }
 
-    pub fn maybe_update(&mut self, f: impl FnOnce(&V) -> V) -> Option<(V, &V)> {
-        if self.as_observer.is_dirty() {
-            let (observer, value) = ObserverInner::run_and_track(|| f(&self.value));
-            let old_value = std::mem::replace(&mut self.value, value);
-            self.as_observer = observer;
-            Some((old_value, &self.value))
-        } else {
-            None
+    pub fn maybe_update(&self, f: impl FnOnce() -> V) {
+        if self.is_dirty() {
+            self.as_observer.borrow().mark_dirty();
+            let (observer, value) = ObserverInner::run_and_track(f);
+            *self.value.borrow_mut() = value;
+            *self.as_observer.borrow_mut() = observer;
         }
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn count_observers(&self) -> usize {
+        Rc::weak_count(&*self.as_observer.borrow())
     }
 }
 
-impl<T> ReadableSignal<T> for Computed<T> {
-    fn as_read_signal(&self) -> ReadSignal<'_, T> {
-        ReadSignal { as_observable: Some(&self.as_observer.as_observable), value: &self.value }
-    }
-
-    fn get_untracked(&self) -> &T {
-        &self.value
-    }
-
-    fn get(&self) -> &T {
-        self.as_observer.as_observable.register();
+impl<T> ReadableSignal<T> for Computed<T> where T: Clone {
+    fn get(&self) -> T {
+        self.as_observer.borrow().as_observable.register();
         self.get_untracked()
+    }
+
+    fn get_untracked(&self) -> T {
+        self.value.borrow().clone()
+    }
+
+    fn track(&self) {
+        self.as_observer.borrow().as_observable.register();
     }
 }
 
 pub struct Derived<A, V> {
-    as_observer: Rc<ObserverInner>,
-    value: V,
+    as_observer: RefCell<Rc<ObserverInner>>,
+    value: RefCell<V>,
     compute: Box<dyn Fn(&mut A) -> V>
 }
 
@@ -344,35 +295,124 @@ impl<A, V> Derived<A, V> where V: Default {
 impl<A, V> Derived<A, V> {
     pub fn new_with_initial(initial: V, compute: impl (Fn(&mut A) -> V) + 'static) -> Derived<A, V> {
         Derived {
-            as_observer: ObserverInner::new(Dirtiness::Dirty),
-            value: initial,
+            as_observer: RefCell::new(ObserverInner::new(Dirtiness::Dirty)),
+            value: RefCell::new(initial),
             compute: Box::new(compute)
         }
     }
 
-    pub fn maybe_update(&mut self, model: &mut A) -> Option<(V, &V)> {
-        if self.as_observer.is_dirty() {
+    pub fn maybe_update(&self, model: &mut A) -> bool {
+        if self.as_observer.borrow().is_dirty() {
+            self.as_observer.borrow().mark_dirty();
             let (observer, value) = ObserverInner::run_and_track(|| (self.compute)(model));
-            let old_value = std::mem::replace(&mut self.value, value);
-            self.as_observer = observer;
-            Some((old_value, &self.value))
+            *self.value.borrow_mut() = value;
+            *self.as_observer.borrow_mut() = observer;
+            true
         } else {
-            None
+            false
         }
     }
 }
 
-impl<A, T> ReadableSignal<T> for Derived<A, T> {
-    fn as_read_signal(&self) -> ReadSignal<'_, T> {
-        ReadSignal { as_observable: Some(&self.as_observer.as_observable), value: &self.value }
+impl<A, T> ReadableSignal<T> for Derived<A, T> where T: Clone {
+    fn get(&self) -> T {
+        self.as_observer.borrow().as_observable.register();
+        self.value.borrow().clone()
     }
 
-    fn get_untracked(&self) -> &T {
-        &self.value
+    fn get_untracked(&self) -> T {
+        self.value.borrow().clone()
     }
 
-    fn get(&self) -> &T {
-        self.as_observer.as_observable.register();
-        &self.value
+    fn track(&self) {
+        self.as_observer.borrow().as_observable.register();
+    }
+}
+
+
+pub struct Computed2<I, V> {
+    as_observer: RefCell<Rc<ObserverInner>>,
+    input: RefCell<I>,
+    value: RefCell<V>,
+    phantom: PhantomData<fn(I)>
+}
+
+impl<I, V> Computed2<I, V> where for<'a> &'a I: PartialEq {
+    pub fn new() -> Computed2<I, V> where I: Default, V: Default {
+        Computed2 {
+            as_observer: RefCell::new(ObserverInner::new(Dirtiness::Dirty)),
+            input: RefCell::new(I::default()),
+            value: RefCell::new(V::default()),
+            phantom: PhantomData
+        }
+    }
+
+    pub fn new_with_initial(input: I, value: V) -> Computed2<I, V> {
+        Computed2 {
+            as_observer: RefCell::new(ObserverInner::new(Dirtiness::Dirty)),
+            input: RefCell::new(input),
+            value: RefCell::new(value),
+            phantom: PhantomData
+        }
+    }
+
+    pub fn maybe_update(&self, input: I, f: impl FnOnce(&I) -> V) {
+        if self.as_observer.borrow().is_dirty() || &input != &*self.input.borrow() {
+            let (observer, value) = ObserverInner::run_and_track(|| f(&input));
+            self.as_observer.borrow().mark_dirty();
+            *self.input.borrow_mut() = input;
+            *self.as_observer.borrow_mut() = observer;
+            *self.value.borrow_mut() = value;
+        }
+    }
+}
+
+impl<I, V> ReadableSignal<V> for Computed2<I, V> where V: Clone {
+    fn get(&self) -> V {
+        self.as_observer.borrow().as_observable.register();
+        self.value.borrow().clone()
+    }
+
+    fn get_untracked(&self) -> V {
+        self.value.borrow().clone()
+    }
+
+    fn track(&self) {
+        self.as_observer.borrow().as_observable.register();
+    }
+}
+
+
+pub struct TrackedVec<T> {
+    inner: RwSignal<Vec<T>>
+}
+
+impl<T> TrackedVec<T> {
+    pub fn new() -> TrackedVec<T> {
+        TrackedVec {
+            inner: RwSignal::new(Vec::new()),
+        }
+    }
+
+    // pub fn maybe_for_each(&self, mut f: impl FnMut(&T)) {
+    //     self.items.maybe_update(|| {
+    //         self.inner.with(|items| {
+    //             for item in items {
+    //                 f(item);
+    //             }
+    //         });
+    //     });
+    // }
+
+    pub fn with<O>(&self, f: impl FnOnce(&[T]) -> O) -> O {
+        self.inner.with(|items| f(items))
+    }
+
+    pub fn with_mut_untracked<O>(&mut self, f: impl FnOnce(&mut [T]) -> O) -> O {
+        f(self.inner.inner.value.borrow_mut().as_mut_slice())
+    }
+
+    pub fn push(&mut self, item: T) {
+        self.inner.update(|items| items.push(item));
     }
 }

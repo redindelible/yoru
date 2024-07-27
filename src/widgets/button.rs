@@ -1,18 +1,18 @@
-use std::convert::identity;
-
-use crate::style::{Color, Direction, LayoutStyle, Justify, Sizing};
-use crate::layout::{BoxLayout, ComputedLayout, Layout, LayoutInput};
-use crate::{Element, Label, RenderContext};
+use crate::style::{Color, Direction, LayoutStyle, Justify, Sizing, ContainerLayoutStyle};
+use crate::layout::{LayoutCharacteristics, Layout, PrelayoutInput, LayoutInput};
+use crate::{Element, Label, layout, math, RenderContext};
 use crate::interact::{Interaction, InteractSet};
 use crate::math::{Axis};
-use crate::tracking::{Computed, ReadableSignal, ReadSignal, Trigger};
+use crate::tracking::{Computed, Computed2, ReadableSignal};
 use crate::widgets::div::to_tiny_skia_path;
 use crate::widgets::Widget;
 
 
 pub struct Button<A> {
-    layout_cache: BoxLayout<A>,
+    style: ContainerLayoutStyle,
 
+    prelayout_cache: Computed2<PrelayoutInput, math::Size>,
+    layout_cache: Computed2<LayoutInput, Layout>,
     interactions: Computed<InteractSet>,
 
     inner: Element<A>,
@@ -21,21 +21,25 @@ pub struct Button<A> {
 
 impl<A: 'static> Button<A> {
     pub fn new(inner: Label<A>, on_click: impl Fn(&mut A) + 'static) -> Button<A> {
-        let layout_cache = BoxLayout::new(LayoutStyle {
-            border_size: 2.0,
-            padding: 2.0.into(),
-            margin: 1.0.into(),
-            width: Sizing::Fit,
-            height: Sizing::Fit,
+        let layout_style = ContainerLayoutStyle {
+            layout_style: LayoutStyle {
+                border_size: 2.0,
+                padding: 2.0.into(),
+                margin: 1.0.into(),
+                width: Sizing::Fit,
+                height: Sizing::Fit,
+            },
             main_axis: Axis::Vertical,
             main_direction: Direction::Positive,
             main_justify: Justify::Center,
             cross_justify: Justify::Center
-        });
-        inner.layout_cache().set_parent(layout_cache.as_parent());
+        };
 
         Button {
-            layout_cache,
+            style: layout_style,
+
+            prelayout_cache: Computed2::new(),
+            layout_cache: Computed2::new(),
             interactions: Computed::new(),
 
             inner: inner.into(),
@@ -45,52 +49,58 @@ impl<A: 'static> Button<A> {
 }
 
 impl<A> Widget<A> for Button<A> {
-    fn layout_cache(&self) -> &BoxLayout<A> {
-        &self.layout_cache
+    fn update(&self, model: &mut A) {
+        self.inner.update(model)
     }
 
-    fn layout_cache_mut(&mut self) -> &mut BoxLayout<A> {
-        &mut self.layout_cache
+    fn prelayout(&self, input: PrelayoutInput) -> LayoutCharacteristics {
+        self.prelayout_cache.maybe_update(input, |&input| {
+            let characteristics = layout::container::do_prelayout(&self.style, input, std::slice::from_ref(&self.inner));
+            characteristics.min_size
+        });
+        LayoutCharacteristics { layout_style: &self.style.layout_style, min_size: self.prelayout_cache.get() }
+    }
+
+    fn layout(&self, input: LayoutInput) {
+        self.layout_cache.maybe_update(input, |&input| {
+            self.prelayout_cache.track();
+            let children_layout = layout::container::do_layout(&self.style, input, std::slice::from_ref(&self.inner));
+            self.inner.layout(children_layout[0]);
+            Layout::from_layout_input(&self.style.layout_style, input)
+        });
+        self.layout_cache.track();
+    }
+
+    fn interactions(&self) -> InteractSet {
+        self.interactions.maybe_update(|| {
+            let set = self.inner.interactions();
+            let this_set = InteractSet {
+                click: true,
+                click_area: self.layout_cache.get().border_box
+            };
+            this_set | set
+        });
+        self.interactions.get()
     }
 
     fn handle_interaction(&mut self, interaction: &Interaction, model: &mut A) {
         if self.interactions.get_untracked().accepts(interaction) {
             match interaction {
                 Interaction::Click(point) => {
-                    let layout = self.layout_cache.get_final_layout().unwrap_or_else(identity);
+                    let layout = self.layout_cache.get_untracked();
                     if layout.border_box.contains(*point) {
                         (self.on_click)(model);
                     }
                 }
-                _ => ()
             }
 
             self.inner.handle_interaction(interaction, model);
         }
     }
 
-    fn update_model(&mut self, model: &mut A) -> Trigger {
-        self.inner.update_model(model)
-    }
-
-    fn compute_layout(&mut self, input: LayoutInput) -> ComputedLayout {
-        self.layout_cache.compute_layout_with_children(input, std::slice::from_mut(&mut self.inner))
-    }
-
-    fn interactions(&mut self, layout: &Layout) -> ReadSignal<InteractSet> {
-        self.interactions.maybe_update(|_| {
-            let set = self.inner.interactions();
-            let this_set = InteractSet {
-                click: true,
-                click_area: layout.border_box
-            };
-            this_set | *set.get()
-        });
-        self.interactions.as_read_signal()
-    }
-
-    fn draw(&mut self, context: &mut RenderContext, layout: &Layout) {
-        let border_size = self.layout_cache.attrs().border_size * layout.scale_factor;
+    fn draw(&mut self, context: &mut RenderContext) {
+        let layout = self.layout_cache.get_untracked();
+        let border_size = self.style.layout_style.border_size * layout.scale_factor;
         if let Some(border_color) = Some(Color::BLACK) {
             if border_size > 0.0 {
                 let border_box = layout.half_border_box;

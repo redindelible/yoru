@@ -26,7 +26,7 @@ fn timed<T>(message: &str, f: impl FnOnce() -> T) -> T {
 
 struct ActiveApplication {
     window: Rc<Window>,
-    context: softbuffer::Context<Rc<Window>>,
+    _context: softbuffer::Context<Rc<Window>>,
     surface: Surface<Rc<Window>, Rc<Window>>,
 }
 
@@ -75,13 +75,13 @@ impl<A> winit::application::ApplicationHandler for Application<A> {
         self.scale_factor = window.scale_factor() as f32;
         self.active = Some(ActiveApplication {
             window,
-            context,
+            _context: context,
             surface
         })
     }
 
-    fn window_event(&mut self, event_loop: &ActiveEventLoop, window_id: WindowId, event: WindowEvent) {
-        let Some(ActiveApplication { window, context, surface }) = &mut self.active else { return; };
+    fn window_event(&mut self, event_loop: &ActiveEventLoop, _window_id: WindowId, event: WindowEvent) {
+        let Some(ActiveApplication { window, _context: _, surface }) = &mut self.active else { return; };
 
         match event {
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
@@ -99,8 +99,8 @@ impl<A> winit::application::ApplicationHandler for Application<A> {
                 let mut pixmap = PixmapMut::from_bytes(bytemuck::must_cast_slice_mut(buffer.as_mut()), size.width, size.height).unwrap();
                 pixmap.fill(Color::WHITE.into());
 
-                timed("Update Model", || self.to_draw.update_model(&mut self.state));
-                timed("Update Layout", || self.to_draw.compute_layout(self.viewport, self.scale_factor));
+                timed("Update Model", || self.to_draw.update(&mut self.state));
+                timed("Update Layout", || self.to_draw.layout(self.viewport, self.scale_factor));
 
                 timed("Update Interactions", || self.to_draw.interactions());
 

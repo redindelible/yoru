@@ -1,8 +1,7 @@
-use std::convert::identity;
 use crate::{math, RenderContext, Widget};
 use crate::interact::{Interaction, InteractSet};
-use crate::layout::{BoxLayout, LayoutInput, ComputedLayout};
-use crate::tracking::{Computed, ReadSignal, Trigger};
+use crate::layout::{PrelayoutInput, LayoutCharacteristics, LayoutInput};
+use crate::tracking::{Computed};
 
 
 pub struct Root<A>(Element<A>, Computed<()>);
@@ -20,14 +19,14 @@ impl<A> Root<A> {
         self.0.handle_interaction(interaction, model)
     }
 
-    pub fn update_model(&mut self, model: &mut A) {
-        self.1.maybe_update(|_| {
-            self.0.update_model(model).track()
+    pub fn update(&mut self, model: &mut A) {
+        self.1.maybe_update(|| {
+            self.0.update(model)
         });
     }
 
-    pub fn compute_layout(&mut self, viewport: math::Size, scale_factor: f32) {
-        self.0.compute_layout(LayoutInput::FinalLayout {
+    pub fn layout(&mut self, viewport: math::Size, scale_factor: f32) {
+        let _ = self.0.layout(LayoutInput {
             allocated: math::Rect::from_topleft_size((0.0, 0.0).into(), viewport),
             scale_factor
         });
@@ -53,34 +52,27 @@ impl<A> Element<A> {
 }
 
 impl<A> Element<A> {
-    pub fn props(&self) -> &BoxLayout<A> {
-        self.0.layout_cache()
-    }
-
-    pub fn props_mut(&mut self) -> &mut BoxLayout<A> {
-        self.0.layout_cache_mut()
-    }
-
-    #[must_use]
-    pub fn update_model(&mut self, model: &mut A) -> Trigger {
-        self.0.update_model(model)
+    pub fn update(&self, model: &mut A) {
+        self.0.update(model)
     }
 
     pub fn handle_interaction(&mut self, interaction: &Interaction, model: &mut A) {
         self.0.handle_interaction(interaction, model)
     }
 
-    pub fn compute_layout(&mut self, input: LayoutInput) -> ComputedLayout {
-        self.0.compute_layout(input)
+    pub fn prelayout(&self, input: PrelayoutInput) -> LayoutCharacteristics {
+        self.0.prelayout(input)
     }
 
-    pub fn interactions(&mut self) -> ReadSignal<InteractSet> {
-        let layout = self.0.layout_cache().get_final_layout().unwrap_or_else(identity);
-        self.0.interactions(&layout)
+    pub fn layout(&self, input: LayoutInput) {
+        self.0.layout(input)
+    }
+
+    pub fn interactions(&self) -> InteractSet {
+        self.0.interactions()
     }
 
     pub fn draw(&mut self, context: &mut RenderContext) {
-        let layout = self.0.layout_cache().get_final_layout().unwrap_or_else(identity);
-        self.0.draw(context, &layout);
+        self.0.draw(context);
     }
 }

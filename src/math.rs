@@ -93,7 +93,7 @@ impl Add<Point> for Vector {
 }
 
 
-#[derive(Copy, Clone, PartialEq, Debug, Zeroable, Pod)]
+#[derive(Copy, Clone, PartialEq, Debug, Zeroable, Pod, Default)]
 #[repr(C)]
 pub struct Size {
     pub vertical: f32,
@@ -189,7 +189,7 @@ impl Mul<Size> for f32 {
 
 
 
-#[derive(Copy, Clone, PartialEq, Debug, Zeroable, Pod)]
+#[derive(Copy, Clone, PartialEq, Debug, Default, Zeroable, Pod)]
 #[repr(C)]
 pub struct Rect {
     pub x: f32,

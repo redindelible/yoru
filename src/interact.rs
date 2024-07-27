@@ -55,7 +55,6 @@ impl std::ops::BitOr for InteractSet {
 
 
 #[derive(Debug)]
-#[non_exhaustive]
 pub enum Interaction {
     Click(math::Point)
 }
